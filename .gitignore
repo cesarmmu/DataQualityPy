@@ -1,0 +1,31 @@
+# Entorno virtual
+.venv/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+
+# Pytest
+.pytest_cache/
+
+# Streamlit
+.streamlit/
+
+# Configuración local
+.env
+
+# VS Code
+.vscode/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos generados por DataQualityPy
+data/output/*
+
+# Mantener la carpeta de salida en el repositorio
+!data/output/.gitkeep
+
+# Documentación histórica de desarrollo
+docs/historico/
