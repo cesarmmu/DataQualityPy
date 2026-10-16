@@ -29,7 +29,9 @@ def test_analizar_columna_numerica_nativa():
     assert resultado.numeric_conversion is not None
     assert resultado.numeric_conversion.attempted_count == 3
     assert resultado.numeric_conversion.convertible_count == 3
-    assert resultado.numeric_conversion.success_ratio == pytest.approx(100.0)
+    assert resultado.numeric_conversion.success_ratio == pytest.approx(
+        100.0
+    )
 
 
 def test_analizar_columna_numerica_almacenada_como_texto():
@@ -51,7 +53,9 @@ def test_analizar_columna_numerica_almacenada_como_texto():
     assert resultado.numeric_conversion is not None
     assert resultado.numeric_conversion.attempted_count == 4
     assert resultado.numeric_conversion.convertible_count == 4
-    assert resultado.numeric_conversion.success_ratio == pytest.approx(100.0)
+    assert resultado.numeric_conversion.success_ratio == pytest.approx(
+        100.0
+    )
 
     assert resultado.numeric_conversion.converted_series.tolist() == [
         22,
@@ -74,7 +78,9 @@ def test_analizar_columna_numerica_con_valor_incompatible():
     assert resultado.numeric_conversion is not None
     assert resultado.numeric_conversion.attempted_count == 4
     assert resultado.numeric_conversion.convertible_count == 3
-    assert resultado.numeric_conversion.success_ratio == pytest.approx(75.0)
+    assert resultado.numeric_conversion.success_ratio == pytest.approx(
+        75.0
+    )
 
     convertida = resultado.numeric_conversion.converted_series
 
@@ -122,7 +128,9 @@ def test_analizar_columna_fecha_textual():
     assert resultado.datetime_conversion is not None
     assert resultado.datetime_conversion.attempted_count == 3
     assert resultado.datetime_conversion.convertible_count == 3
-    assert resultado.datetime_conversion.success_ratio == pytest.approx(100.0)
+    assert resultado.datetime_conversion.success_ratio == pytest.approx(
+        100.0
+    )
 
 
 def test_analizar_columna_fecha_con_valor_incompatible():
@@ -231,7 +239,11 @@ def test_analyzable_series_excluye_nulos_reales_y_textuales():
 
     resultado = analizar_columna(serie)
 
-    assert resultado.analyzable_series.tolist() == ["22", "35", "54"]
+    assert resultado.analyzable_series.tolist() == [
+        "22",
+        "35",
+        "54",
+    ]
     assert resultado.analyzable_count == 3
 
 
@@ -246,7 +258,11 @@ def test_analyzable_series_conserva_indices_originales():
 
     resultado = analizar_columna(serie)
 
-    assert resultado.analyzable_series.index.tolist() == [10, 30, 50]
+    assert resultado.analyzable_series.index.tolist() == [
+        10,
+        30,
+        50,
+    ]
     assert resultado.analyzable_series.tolist() == [
         "Madrid",
         "Sevilla",
@@ -261,6 +277,7 @@ def test_analyzable_series_es_copia_independiente():
         name="Age",
         dtype="object",
     )
+
     original = serie.copy(deep=True)
 
     resultado = analizar_columna(serie)
@@ -268,3 +285,155 @@ def test_analyzable_series_es_copia_independiente():
 
     pd.testing.assert_series_equal(serie, original)
 
+
+def test_metricas_cobertura_v6():
+    """Las propiedades V6 deben resumir cobertura y ausencia de datos."""
+    serie = pd.Series(
+        ["Madrid", "NA", None, "Sevilla", ""],
+        name="ciudad",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.null_count == 3
+    assert resultado.null_ratio == pytest.approx(60.0)
+    assert resultado.analyzable_count == 2
+    assert resultado.analyzable_ratio == pytest.approx(40.0)
+
+
+def test_frecuencia_dominante_v6():
+    """El análisis debe conservar la frecuencia del valor dominante."""
+    serie = pd.Series(
+        [
+            "Madrid",
+            "Sevilla",
+            "Madrid",
+            "Bilbao",
+            "Madrid",
+            None,
+        ],
+        name="ciudad",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.most_frequent_value == "Madrid"
+    assert resultado.most_frequent_count == 3
+    assert resultado.most_frequent_ratio == pytest.approx(60.0)
+
+
+def test_frecuencia_dominante_columna_sin_datos_v6():
+    """Una columna sin datos analizables debe tener frecuencia vacía."""
+    serie = pd.Series(
+        [None, "NA", ""],
+        name="vacia",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.most_frequent_value is None
+    assert resultado.most_frequent_count == 0
+    assert resultado.most_frequent_ratio == pytest.approx(0.0)
+
+
+def test_failed_count_conversion_v6():
+    """La conversión debe exponer directamente el número de fallos."""
+    serie = pd.Series(
+        ["10", "error", "20", "incorrecto", "30"],
+        name="cantidad",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.numeric_conversion is not None
+    assert resultado.numeric_conversion.attempted_count == 5
+    assert resultado.numeric_conversion.convertible_count == 3
+    assert resultado.numeric_conversion.failed_count == 2
+
+
+def test_cardinalidad_repeticion_parcial_v6():
+    """La cardinalidad debe distinguir repetición y exceso duplicado."""
+    serie = pd.Series(
+        ["A", "A", "A", "B", "C"],
+        name="codigo",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.analyzable_count == 5
+    assert resultado.unique_count == 3
+    assert resultado.unique_ratio == pytest.approx(60.0)
+
+    assert resultado.repeated_value_count == 3
+    assert resultado.repeated_value_ratio == pytest.approx(60.0)
+
+    assert resultado.duplicate_excess_count == 2
+    assert resultado.duplicate_excess_ratio == pytest.approx(40.0)
+
+
+def test_cardinalidad_columna_totalmente_unica_v6():
+    """Una columna única no debe presentar ninguna repetición."""
+    serie = pd.Series(
+        ["A", "B", "C", "D"],
+        name="codigo",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.analyzable_count == 4
+    assert resultado.unique_count == 4
+    assert resultado.unique_ratio == pytest.approx(100.0)
+
+    assert resultado.repeated_value_count == 0
+    assert resultado.repeated_value_ratio == pytest.approx(0.0)
+
+    assert resultado.duplicate_excess_count == 0
+    assert resultado.duplicate_excess_ratio == pytest.approx(0.0)
+
+
+def test_cardinalidad_columna_constante_v6():
+    """Una columna constante debe reflejar repetición y exceso duplicado."""
+    serie = pd.Series(
+        ["A", "A", "A", "A"],
+        name="estado",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.analyzable_count == 4
+    assert resultado.unique_count == 1
+    assert resultado.unique_ratio == pytest.approx(25.0)
+
+    assert resultado.repeated_value_count == 4
+    assert resultado.repeated_value_ratio == pytest.approx(100.0)
+
+    assert resultado.duplicate_excess_count == 3
+    assert resultado.duplicate_excess_ratio == pytest.approx(75.0)
+
+
+def test_cardinalidad_columna_sin_valores_analizables_v6():
+    """Una columna vacía debe producir cardinalidad y repetición nulas."""
+    serie = pd.Series(
+        [None, "NA", "", "null"],
+        name="vacia",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.analyzable_count == 0
+    assert resultado.unique_count == 0
+    assert resultado.unique_ratio == pytest.approx(0.0)
+
+    assert resultado.repeated_value_count == 0
+    assert resultado.repeated_value_ratio == pytest.approx(0.0)
+
+    assert resultado.duplicate_excess_count == 0
+    assert resultado.duplicate_excess_ratio == pytest.approx(0.0)

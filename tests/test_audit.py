@@ -40,6 +40,7 @@ def test_auditar_dataset_genera_resultado_estructurado() -> None:
         "calidad",
         "incidencias",
         "resumen",
+        "analisis_avanzado",
     }
 
     assert resultado["dataset"] == {
@@ -90,6 +91,45 @@ def test_auditar_dataset_genera_resultado_estructurado() -> None:
     assert resultado["resumen"]["total_incidencias"] == len(
         resultado["incidencias"]
     )
+
+    analisis_avanzado = resultado["analisis_avanzado"]
+
+    assert set(analisis_avanzado) == {
+        "columnas",
+        "claves_candidatas",
+        "distribuciones",
+        "diagnosticos",
+        "relaciones",
+    }
+
+    assert set(analisis_avanzado["columnas"]) == {
+        "id",
+        "producto",
+        "precio",
+    }
+
+    assert set(analisis_avanzado["claves_candidatas"]) == {
+        "id",
+        "producto",
+        "precio",
+    }
+
+    assert set(analisis_avanzado["distribuciones"]) == {
+        "id",
+        "producto",
+        "precio",
+    }
+
+    assert isinstance(
+        analisis_avanzado["diagnosticos"],
+        list,
+    )
+
+    assert set(analisis_avanzado["relaciones"]) == {
+        "claves_compuestas",
+        "relaciones_funcionales",
+        "relaciones_presencia",
+    }
 
 
 def test_auditar_dataset_integra_inferencia_semantica() -> None:
@@ -630,4 +670,3 @@ def test_auditar_dataset_integra_resumen_ejecutivo_v3() -> None:
         "controles_no_aplicables": [],
         "controles_no_configurados": [],
     }
-

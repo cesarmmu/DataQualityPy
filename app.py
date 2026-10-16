@@ -1,4 +1,4 @@
-"""Punto de entrada de DataQualityPy V5."""
+"""Punto de entrada de DataQualityPy V6."""
 
 import streamlit as st
 
@@ -27,7 +27,7 @@ def inicializar_estado() -> None:
 
 
 def main() -> None:
-    """Ejecuta la interfaz de DataQualityPy V5."""
+    """Ejecuta la interfaz de DataQualityPy V6."""
 
     configurar_aplicacion()
     inicializar_estado()
@@ -62,3 +62,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

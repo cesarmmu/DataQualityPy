@@ -561,7 +561,7 @@ def _ejecutar_duplicados(
     conservar = operacion.parametros.get("conservar", "primero")
     if conservar != "primero":
         raise CleaningError(
-            "En V5 solo se admite conservar la primera aparición "
+            "Solo se admite conservar la primera aparición "
             "de los duplicados completos."
         )
 
@@ -688,3 +688,4 @@ def ejecutar_plan_limpieza(
     )
 
     return trabajo, resultado
+

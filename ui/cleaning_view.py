@@ -1,8 +1,9 @@
-"""Interfaz de preparación de limpieza controlada de DataQualityPy V5."""
+"""Interfaz de preparación de limpieza controlada de DataQualityPy V6."""
 
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import tempfile
 from typing import Any
 
@@ -11,7 +12,27 @@ import streamlit as st
 
 from src.audit import auditar_dataset
 from src.cleaning import CleaningError, ejecutar_plan_limpieza
+from src.cleaning_decisions import (
+    CleaningDecisionError,
+    agregar_recomendacion_al_plan,
+)
+from src.cleaning_recommendations import (
+    CleaningActionType,
+    CleaningRecommendation,
+    generar_recomendaciones_limpieza_dataset,
+)
+from src.diagnostics import Diagnostic
 from src.cleaning_plan import CleaningPlan, CleaningPlanError
+from src.cleaning_plan_storage import (
+    CleaningPlanStorageError,
+    crear_plan_almacenado,
+    plan_almacenado_desde_dict,
+    reconstruir_plan,
+)
+from src.cleaning_simulation import (
+    CleaningSimulationError,
+    resumir_simulacion,
+)
 from src.cleaning_export import (
     ErrorExportacionLimpieza,
     exportar_dataset_limpio,
@@ -21,6 +42,15 @@ from src.cleaning_report import (
     generar_html_limpieza,
     generar_json_limpieza,
     generar_nombres_informes,
+)
+from src.reproducibility import (
+    DatasetVerificationStatus,
+    ExecutionManifest,
+    ReproducibilityError,
+    crear_manifiesto,
+    manifiesto_desde_dict,
+    reconstruir_plan_manifiesto,
+    verificar_dataset,
 )
 
 
@@ -185,6 +215,411 @@ def _mostrar_cabecera(
         "Trabajaremos sobre una copia en memoria. "
         "El archivo y los datos originales permanecerán sin cambios."
     )
+
+
+
+def _reconstruir_diagnosticos_recomendaciones(
+    resultado: dict[str, Any],
+) -> tuple[Diagnostic, ...]:
+    """Reconstruye los diagnósticos V6.1 serializados por la auditoría."""
+    avanzados = resultado.get("analisis_avanzado", {})
+    diagnosticos = avanzados.get("diagnosticos", [])
+
+    reconstruidos: list[Diagnostic] = []
+    for diagnostico in diagnosticos:
+        if not isinstance(diagnostico, dict):
+            continue
+
+        acciones = diagnostico.get("acciones_posibles", ())
+        if isinstance(acciones, str):
+            acciones = (acciones,)
+        elif isinstance(acciones, list):
+            acciones = tuple(str(accion) for accion in acciones)
+        elif not isinstance(acciones, tuple):
+            acciones = ()
+
+        contexto = diagnostico.get("contexto", ())
+        if isinstance(contexto, str):
+            contexto = (contexto,) if contexto else ()
+        elif isinstance(contexto, list):
+            contexto = tuple(str(elemento) for elemento in contexto)
+        elif isinstance(contexto, tuple):
+            contexto = tuple(str(elemento) for elemento in contexto)
+        else:
+            contexto = ()
+
+        reconstruidos.append(
+            Diagnostic(
+                incident_type=str(diagnostico.get("tipo_incidencia", "")),
+                category=str(diagnostico.get("categoria", "")),
+                severity=str(diagnostico.get("severidad", "")),
+                column_name=diagnostico.get("columna"),
+                incident_message=str(
+                    diagnostico.get("mensaje_incidencia", "")
+                ),
+                context=contexto,
+                possible_actions=acciones,
+            )
+        )
+
+    return tuple(reconstruidos)
+
+
+def _obtener_recomendaciones(
+    resultado: dict[str, Any],
+) -> tuple[CleaningRecommendation, ...]:
+    """Genera las recomendaciones V6.2 a partir de los diagnósticos V6.1."""
+    diagnosticos = _reconstruir_diagnosticos_recomendaciones(resultado)
+    if not diagnosticos:
+        return ()
+    return generar_recomendaciones_limpieza_dataset(diagnosticos)
+
+
+def _etiqueta_accion_recomendacion(
+    action_type: CleaningActionType,
+) -> str:
+    """Devuelve la etiqueta visible de una recomendación."""
+    etiquetas = {
+        CleaningActionType.REVIEW: "Revisar",
+        CleaningActionType.KEEP: "Mantener",
+        CleaningActionType.CLEAN: "Limpiar",
+    }
+    return etiquetas.get(action_type, str(action_type.value).capitalize())
+
+
+def _recomendacion_equivalente_en_plan(
+    plan: CleaningPlan,
+    recomendacion: CleaningRecommendation,
+    *,
+    operation_type: str | None = None,
+    parameters: dict[str, Any] | None = None,
+) -> bool:
+    """Comprueba si la decisión recomendada ya está incluida en el plan."""
+    if recomendacion.action_type is not CleaningActionType.CLEAN:
+        return False
+
+    tipo = operation_type or recomendacion.operation_type
+    if tipo is None or recomendacion.family is None:
+        return False
+
+    parametros = dict(recomendacion.parameters)
+    if parameters:
+        parametros.update(parameters)
+
+    columna = (
+        None
+        if recomendacion.column_name is None
+        else str(recomendacion.column_name)
+    )
+
+    return any(
+        operacion.familia == recomendacion.family
+        and operacion.tipo == tipo
+        and operacion.columna == columna
+        and operacion.parametros == parametros
+        for operacion in plan.operaciones
+    )
+
+
+def _incorporar_recomendacion(
+    plan: CleaningPlan,
+    recomendacion: CleaningRecommendation,
+    *,
+    operation_type: str | None = None,
+    parameters: dict[str, Any] | None = None,
+) -> None:
+    """Añade al plan una recomendación aceptada explícitamente."""
+    if _recomendacion_equivalente_en_plan(
+        plan,
+        recomendacion,
+        operation_type=operation_type,
+        parameters=parameters,
+    ):
+        st.info("Esa recomendación ya forma parte del plan de limpieza.")
+        return
+
+    try:
+        agregar_recomendacion_al_plan(
+            plan,
+            recomendacion,
+            operation_type=operation_type,
+            parameters=parameters,
+        )
+    except (CleaningDecisionError, CleaningPlanError) as exc:
+        st.error(str(exc))
+        return
+
+    st.session_state["plan_limpieza"] = plan
+    st.session_state.pop("simulacion_limpieza", None)
+    st.session_state.pop("confirmar_aplicar_limpieza", None)
+    st.session_state["mensaje_plan_limpieza"] = (
+        "Recomendación añadida al plan de limpieza."
+    )
+    st.rerun()
+
+
+def _parametros_recomendacion(
+    recomendacion: CleaningRecommendation,
+    indice: int,
+) -> tuple[str | None, dict[str, Any] | None, bool]:
+    """Solicita únicamente los datos que la recomendación necesita."""
+    if not recomendacion.requires_user_input:
+        return None, None, True
+
+    familia = recomendacion.family
+    tipo = recomendacion.operation_type
+    columna = (
+        "dataset"
+        if recomendacion.column_name is None
+        else str(recomendacion.column_name)
+    )
+    prefijo = f"rec_{indice}_{familia}_{tipo}_{columna}"
+
+    if familia == "nulos" and tipo == "reemplazar_valor":
+        valor = st.text_input(
+            "Valor de reemplazo",
+            key=f"{prefijo}_valor",
+        )
+        if valor == "":
+            st.caption(
+                "Indica el valor que sustituirá a los nulos antes de "
+                "añadir la recomendación."
+            )
+            return None, None, False
+        return None, {"valor": valor}, True
+
+    if familia == "sustitucion" and tipo == "reemplazar_por_nulo":
+        origen = st.text_input(
+            "Marcador textual que debe convertirse en nulo real",
+            key=f"{prefijo}_origen",
+        )
+        if origen == "":
+            st.caption(
+                "Indica explícitamente el marcador que representa un nulo."
+            )
+            return None, None, False
+        return None, {"origen": origen}, True
+
+    if familia == "sustitucion" and tipo == "reemplazar_valor":
+        origen = st.text_input(
+            "Valor de origen",
+            key=f"{prefijo}_origen",
+        )
+        destino = st.text_input(
+            "Valor de destino",
+            key=f"{prefijo}_destino",
+        )
+        if origen == "" or destino == "":
+            st.caption(
+                "Indica los valores de origen y destino antes de añadir "
+                "la recomendación."
+            )
+            return None, None, False
+        return None, {"origen": origen, "destino": destino}, True
+
+    if familia == "texto":
+        opciones = {
+            "Minúsculas": "minusculas",
+            "MAYÚSCULAS": "mayusculas",
+            "Capitalizar": "capitalizar",
+            "Formato título": "titulo",
+        }
+        etiqueta = st.selectbox(
+            "Normalización de texto",
+            list(opciones),
+            key=f"{prefijo}_tipo_texto",
+        )
+        return opciones[etiqueta], None, True
+
+    if familia == "conversion":
+        opciones = {
+            "Numérico": "numerico",
+            "Fecha": "fecha",
+            "Fecha y hora": "fecha_hora",
+            "Texto": "texto",
+            "Booleano": "booleano",
+        }
+
+        if tipo in {"fecha", "fecha_hora"}:
+            operation_type = tipo
+        else:
+            etiqueta = st.selectbox(
+                "Tipo de destino",
+                list(opciones),
+                key=f"{prefijo}_tipo_conversion",
+            )
+            operation_type = opciones[etiqueta]
+
+        parametros: dict[str, Any] = {}
+        if operation_type in {"fecha", "fecha_hora"}:
+            formato = st.text_input(
+                "Formato de fecha opcional",
+                placeholder="%d/%m/%Y",
+                key=f"{prefijo}_formato",
+            )
+            if formato:
+                parametros["formato"] = formato
+
+        return operation_type, parametros or None, True
+
+    st.info(
+        "Esta recomendación requiere una decisión adicional. "
+        "Utiliza la sección manual correspondiente para configurarla "
+        "con todos sus controles."
+    )
+    return None, None, False
+
+
+def _mostrar_recomendaciones(
+    resultado: dict[str, Any],
+    plan: CleaningPlan,
+) -> None:
+    """Muestra recomendaciones V6.2 sin tomar decisiones por el usuario."""
+    st.subheader("Recomendaciones")
+    st.caption(
+        "Las recomendaciones se derivan del diagnóstico de la auditoría. "
+        "No modifican los datos ni el plan hasta que aceptes expresamente "
+        "una operación de limpieza."
+    )
+
+    recomendaciones = _obtener_recomendaciones(resultado)
+    if not recomendaciones:
+        st.success(
+            "No hay recomendaciones de limpieza asociadas a la auditoría."
+        )
+        return
+
+    limpiar = sum(
+        recomendacion.action_type is CleaningActionType.CLEAN
+        for recomendacion in recomendaciones
+    )
+    revisar = sum(
+        recomendacion.action_type is CleaningActionType.REVIEW
+        for recomendacion in recomendaciones
+    )
+    mantener = sum(
+        recomendacion.action_type is CleaningActionType.KEEP
+        for recomendacion in recomendaciones
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Recomendaciones", len(recomendaciones))
+    c2.metric("Limpiar", limpiar)
+    c3.metric("Revisar", revisar)
+    c4.metric("Mantener", mantener)
+
+    columnas = sorted(
+        {
+            str(recomendacion.column_name)
+            for recomendacion in recomendaciones
+            if recomendacion.column_name is not None
+        }
+    )
+    opciones_columnas = ["Todas"] + columnas
+    filtro_columna = st.selectbox(
+        "Filtrar por columna",
+        opciones_columnas,
+        key="recomendaciones_filtro_columna",
+    )
+
+    tipos_presentes = [
+        tipo
+        for tipo in (
+            CleaningActionType.CLEAN,
+            CleaningActionType.REVIEW,
+            CleaningActionType.KEEP,
+        )
+        if any(
+            recomendacion.action_type is tipo
+            for recomendacion in recomendaciones
+        )
+    ]
+    filtro_accion = st.multiselect(
+        "Filtrar por acción",
+        tipos_presentes,
+        default=tipos_presentes,
+        format_func=_etiqueta_accion_recomendacion,
+        key="recomendaciones_filtro_accion",
+    )
+
+    visibles = [
+        recomendacion
+        for recomendacion in recomendaciones
+        if recomendacion.action_type in filtro_accion
+        and (
+            filtro_columna == "Todas"
+            or str(recomendacion.column_name) == filtro_columna
+        )
+    ]
+
+    if not visibles:
+        st.info("No hay recomendaciones que coincidan con los filtros.")
+        return
+
+    st.divider()
+
+    for indice, recomendacion in enumerate(visibles):
+        columna = (
+            "Dataset completo"
+            if recomendacion.column_name is None
+            else str(recomendacion.column_name)
+        )
+        accion = _etiqueta_accion_recomendacion(
+            recomendacion.action_type
+        )
+        titulo = f"{recomendacion.title} · {columna}"
+
+        with st.expander(titulo):
+            a, b, c = st.columns(3)
+            a.metric("Acción", accion)
+            b.metric("Columna", columna)
+            c.metric(
+                "Operación",
+                (
+                    NOMBRES_OPERACIONES.get(
+                        recomendacion.operation_type,
+                        recomendacion.operation_type,
+                    )
+                    if recomendacion.operation_type
+                    else "No automática"
+                ),
+            )
+
+            st.write(recomendacion.explanation)
+            st.caption(
+                f"Incidencia de origen: {recomendacion.incident_type}"
+            )
+
+            if recomendacion.action_type is CleaningActionType.KEEP:
+                st.info(
+                    "Esta recomendación propone conservar los datos. "
+                    "No añade ninguna operación al plan."
+                )
+                continue
+
+            if recomendacion.action_type is CleaningActionType.REVIEW:
+                st.info(
+                    "Esta recomendación requiere revisión. "
+                    "No existe una transformación automática asociada."
+                )
+                continue
+
+            operation_type, parameters, preparada = (
+                _parametros_recomendacion(recomendacion, indice)
+            )
+
+            if st.button(
+                "Añadir recomendación al plan",
+                key=f"recomendacion_add_{indice}",
+                use_container_width=True,
+                disabled=not preparada,
+            ):
+                _incorporar_recomendacion(
+                    plan,
+                    recomendacion,
+                    operation_type=operation_type,
+                    parameters=parameters,
+                )
 
 
 def _mostrar_texto(
@@ -473,6 +908,7 @@ def _mostrar_sustituciones(
 
     destino: Any = None
     tipo_operacion = "reemplazar_por_nulo"
+    candidatos: list[Any] = []
 
     if modo == "Valor existente":
         candidatos = [
@@ -1062,12 +1498,17 @@ def _mostrar_outliers(
         return
 
     columnas = list(outliers.keys())
-    columna = st.selectbox(
+    columna_seleccionada = st.selectbox(
         "Columna",
         columnas,
         key="limpieza_outliers_columna",
     )
-    info = outliers[columna]
+    if columna_seleccionada is None:
+        st.info("No hay ninguna columna de outliers seleccionable.")
+        return
+
+    columna = str(columna_seleccionada)
+    info = outliers[columna_seleccionada]
 
     cantidad = int(info.get("cantidad_outliers", 0))
     porcentaje = float(info.get("porcentaje_outliers", 0.0))
@@ -1232,10 +1673,10 @@ def _mostrar_duplicados(
         )
 
 def _descripcion_operacion(operacion: Any) -> str:
-    nombre = NOMBRES_OPERACIONES.get(
-        operacion.tipo,
-        operacion.tipo.replace("_", " ").capitalize(),
-    )
+    tipo = str(operacion.tipo)
+    nombre = NOMBRES_OPERACIONES.get(tipo)
+    if nombre is None:
+        nombre = tipo.replace("_", " ").capitalize()
 
     if operacion.tipo == "sustituir_caracteres":
         return (
@@ -1271,15 +1712,443 @@ def _descripcion_operacion(operacion: Any) -> str:
     return nombre
 
 
+def _nombre_archivo_plan(nombre: str) -> str:
+    """Construye un nombre de archivo JSON seguro para descargar el plan."""
+    base = "".join(
+        caracter if caracter.isalnum() or caracter in {"-", "_"} else "_"
+        for caracter in nombre.strip()
+    ).strip("_")
+    return f"{base or 'plan_limpieza'}.json"
+
+
+def _mostrar_planes_reutilizables(plan: CleaningPlan) -> None:
+    """Permite descargar y cargar planes V6 reutilizables de forma explícita."""
+    st.markdown("**Planes reutilizables**")
+    st.caption(
+        "Guarda la definición del plan en JSON o recupera un plan anterior. "
+        "Cargar un archivo reconstruye un plan nuevo y validado; no ejecuta "
+        "ninguna limpieza automáticamente."
+    )
+
+    guardar, cargar = st.columns(2)
+
+    with guardar:
+        nombre_plan = st.text_input(
+            "Nombre del plan",
+            value="Plan de limpieza",
+            key="nombre_plan_reutilizable",
+        )
+
+        datos_descarga: bytes | None = None
+        error_guardado: str | None = None
+        if not plan.esta_vacio() and nombre_plan.strip():
+            try:
+                almacenado = crear_plan_almacenado(plan, nombre_plan)
+                datos_descarga = json.dumps(
+                    almacenado.a_dict(),
+                    ensure_ascii=False,
+                    indent=2,
+                ).encode("utf-8")
+            except CleaningPlanStorageError as exc:
+                error_guardado = str(exc)
+
+        if error_guardado is not None:
+            st.warning(error_guardado)
+
+        st.download_button(
+            "Descargar plan JSON",
+            data=datos_descarga or b"",
+            file_name=_nombre_archivo_plan(nombre_plan),
+            mime="application/json",
+            use_container_width=True,
+            disabled=(
+                plan.esta_vacio()
+                or not nombre_plan.strip()
+                or datos_descarga is None
+            ),
+            key="descargar_plan_reutilizable",
+        )
+
+    with cargar:
+        archivo_plan = st.file_uploader(
+            "Cargar plan JSON",
+            type=["json"],
+            accept_multiple_files=False,
+            key="cargar_plan_reutilizable",
+        )
+
+        if archivo_plan is not None:
+            st.caption(
+                "El plan cargado sustituirá al plan actual únicamente cuando "
+                "pulses el botón de confirmación."
+            )
+
+        if st.button(
+            "Cargar y sustituir plan actual",
+            use_container_width=True,
+            disabled=archivo_plan is None,
+            key="confirmar_carga_plan_reutilizable",
+        ):
+            try:
+                if archivo_plan is None:
+                    raise CleaningPlanStorageError(
+                        "Selecciona primero un archivo JSON de plan."
+                    )
+                contenido = archivo_plan.getvalue().decode("utf-8")
+                datos_plan = json.loads(contenido)
+                almacenado = plan_almacenado_desde_dict(datos_plan)
+                plan_cargado = reconstruir_plan(almacenado)
+            except UnicodeDecodeError:
+                st.error("El archivo del plan debe estar codificado en UTF-8.")
+            except json.JSONDecodeError:
+                st.error("El archivo seleccionado no contiene un JSON válido.")
+            except CleaningPlanStorageError as exc:
+                st.error(f"No se puede cargar el plan: {exc}")
+            else:
+                st.session_state["plan_limpieza"] = plan_cargado
+                st.session_state.pop("simulacion_limpieza", None)
+                st.session_state.pop("confirmar_aplicar_limpieza", None)
+                st.session_state["mensaje_plan_limpieza"] = (
+                    f"Plan reutilizable '{almacenado.name}' cargado: "
+                    f"{len(plan_cargado)} operaciones."
+                )
+                st.session_state["seccion_limpieza"] = (
+                    f"Plan de limpieza ({len(plan_cargado)})"
+                )
+                st.rerun()
+
+
+def _nombre_archivo_manifiesto(nombre_archivo: str) -> str:
+    """Construye el nombre de descarga del manifiesto reproducible."""
+    base = Path(nombre_archivo).stem.strip() or "dataset"
+    seguro = "".join(
+        caracter if caracter.isalnum() or caracter in {"-", "_"} else "_"
+        for caracter in base
+    ).strip("_")
+    return f"{seguro or 'dataset'}_manifest.json"
+
+
+def _crear_manifiesto_sesion(plan: CleaningPlan) -> ExecutionManifest:
+    """Crea un manifiesto del dataset auditado conservado en la sesión."""
+    bytes_original = st.session_state.get("archivo_original_bytes")
+    if not isinstance(bytes_original, (bytes, bytearray)):
+        raise ReproducibilityError(
+            "No se conserva el archivo original en esta sesión. "
+            "Vuelve a auditar el dataset para generar su manifiesto."
+        )
+
+    nombre_archivo = str(
+        st.session_state.get("archivo_auditoria", "dataset.csv")
+    )
+    configuracion = st.session_state.get("configuracion_auditoria", {})
+    nombre_plan = str(
+        st.session_state.get("nombre_plan_reutilizable", "Plan de limpieza")
+    ).strip()
+
+    with tempfile.TemporaryDirectory() as directorio:
+        ruta = Path(directorio) / Path(nombre_archivo).name
+        ruta.write_bytes(bytes(bytes_original))
+        return crear_manifiesto(
+            ruta,
+            audit_configuration=(
+                configuracion if isinstance(configuracion, dict) else {}
+            ),
+            cleaning_plan=None if plan.esta_vacio() else plan,
+            cleaning_plan_name=(
+                None if plan.esta_vacio() else (nombre_plan or "Plan de limpieza")
+            ),
+        )
+
+
+def _verificar_dataset_sesion(
+    manifiesto: ExecutionManifest,
+):
+    """Verifica el archivo original de la sesión frente a un manifiesto."""
+    bytes_original = st.session_state.get("archivo_original_bytes")
+    if not isinstance(bytes_original, (bytes, bytearray)):
+        raise ReproducibilityError(
+            "No se conserva el archivo original en esta sesión. "
+            "Vuelve a auditar el dataset antes de verificarlo."
+        )
+
+    nombre_archivo = str(
+        st.session_state.get("archivo_auditoria", "dataset.csv")
+    )
+    with tempfile.TemporaryDirectory() as directorio:
+        ruta = Path(directorio) / Path(nombre_archivo).name
+        ruta.write_bytes(bytes(bytes_original))
+        return verificar_dataset(ruta, manifiesto)
+
+
+def _mostrar_resumen_manifiesto(manifiesto: ExecutionManifest) -> None:
+    """Muestra los datos reproducibles esenciales sin ejecutar acciones."""
+    referencia = manifiesto.dataset
+    plan_guardado = manifiesto.cleaning_plan
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Dataset registrado", referencia.file_name)
+    c2.metric("Tamaño", f"{referencia.file_size:,} bytes".replace(",", "."))
+    c3.metric(
+        "Plan incluido",
+        "Sí" if plan_guardado is not None else "No",
+    )
+
+    st.caption(f"Creado: {manifiesto.created_at}")
+    st.code(referencia.sha256, language=None)
+    st.caption("Huella SHA-256 registrada para identificar el contenido exacto.")
+
+    if plan_guardado is not None:
+        st.caption(
+            f"Plan almacenado: {plan_guardado.name} · "
+            f"{len(plan_guardado.operations)} operaciones."
+        )
+
+    with st.expander("Configuración de auditoría almacenada"):
+        st.json(dict(manifiesto.audit_configuration))
+
+
+def _mostrar_reproducibilidad(plan: CleaningPlan) -> None:
+    """Integra manifiestos V6 sin auditoría ni limpieza automáticas."""
+    st.markdown("**Reproducibilidad**")
+    st.caption(
+        "El manifiesto registra el dataset mediante SHA-256, la configuración "
+        "de auditoría y, si existe, el plan de limpieza. Cargarlo solo permite "
+        "revisar y verificar información; no audita ni limpia automáticamente."
+    )
+
+    generar, recuperar = st.columns(2)
+
+    with generar:
+        manifiesto_actual: ExecutionManifest | None = None
+        error_manifiesto: str | None = None
+        try:
+            manifiesto_actual = _crear_manifiesto_sesion(plan)
+        except ReproducibilityError as exc:
+            error_manifiesto = str(exc)
+
+        if error_manifiesto is not None:
+            st.warning(error_manifiesto)
+
+        if manifiesto_actual is not None:
+            datos_manifiesto = json.dumps(
+                manifiesto_actual.a_dict(),
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8")
+            nombre_dataset = str(
+                st.session_state.get("archivo_auditoria", "dataset.csv")
+            )
+        else:
+            datos_manifiesto = b""
+            nombre_dataset = "dataset.csv"
+
+        st.download_button(
+            "Descargar manifiesto JSON",
+            data=datos_manifiesto,
+            file_name=_nombre_archivo_manifiesto(nombre_dataset),
+            mime="application/json",
+            use_container_width=True,
+            disabled=manifiesto_actual is None,
+            key="descargar_manifiesto_reproducible",
+        )
+
+        if manifiesto_actual is not None:
+            with st.expander("Vista previa del manifiesto actual"):
+                _mostrar_resumen_manifiesto(manifiesto_actual)
+
+    with recuperar:
+        archivo_manifiesto = st.file_uploader(
+            "Cargar manifiesto JSON",
+            type=["json"],
+            accept_multiple_files=False,
+            key="cargar_manifiesto_reproducible",
+        )
+
+        manifiesto_cargado: ExecutionManifest | None = None
+        if archivo_manifiesto is not None:
+            try:
+                contenido = archivo_manifiesto.getvalue().decode("utf-8")
+                manifiesto_cargado = manifiesto_desde_dict(json.loads(contenido))
+            except UnicodeDecodeError:
+                st.error("El manifiesto debe estar codificado en UTF-8.")
+            except json.JSONDecodeError:
+                st.error("El archivo seleccionado no contiene un JSON válido.")
+            except ReproducibilityError as exc:
+                st.error(f"No se puede cargar el manifiesto: {exc}")
+
+        if manifiesto_cargado is not None:
+            _mostrar_resumen_manifiesto(manifiesto_cargado)
+
+            if st.button(
+                "Verificar dataset auditado",
+                use_container_width=True,
+                key="verificar_dataset_manifiesto",
+            ):
+                try:
+                    verificacion = _verificar_dataset_sesion(manifiesto_cargado)
+                except ReproducibilityError as exc:
+                    st.error(f"No se puede verificar el dataset: {exc}")
+                else:
+                    if verificacion.status is DatasetVerificationStatus.MATCH:
+                        st.success(
+                            "El dataset auditado coincide exactamente con el "
+                            "registrado en el manifiesto."
+                        )
+                    else:
+                        st.error(
+                            "El dataset auditado no coincide con el registrado "
+                            "en el manifiesto."
+                        )
+                    with st.expander("Detalle de la verificación"):
+                        st.write(
+                            {
+                                "Tamaño esperado": verificacion.expected_size,
+                                "Tamaño actual": verificacion.actual_size,
+                                "SHA-256 esperado": verificacion.expected_sha256,
+                                "SHA-256 actual": verificacion.actual_sha256,
+                            }
+                        )
+
+            if manifiesto_cargado.cleaning_plan is not None:
+                st.caption(
+                    "El manifiesto contiene un plan. Recuperarlo sustituye el "
+                    "plan actual, pero no lo simula ni lo ejecuta."
+                )
+                if st.button(
+                    "Recuperar plan del manifiesto",
+                    use_container_width=True,
+                    key="recuperar_plan_manifiesto",
+                ):
+                    try:
+                        plan_recuperado = reconstruir_plan_manifiesto(
+                            manifiesto_cargado
+                        )
+                    except ReproducibilityError as exc:
+                        st.error(f"No se puede recuperar el plan: {exc}")
+                    else:
+                        if plan_recuperado is not None:
+                            st.session_state["plan_limpieza"] = plan_recuperado
+                            st.session_state.pop("simulacion_limpieza", None)
+                            st.session_state.pop(
+                                "confirmar_aplicar_limpieza", None
+                            )
+                            st.session_state["mensaje_plan_limpieza"] = (
+                                "Plan recuperado desde el manifiesto: "
+                                f"{len(plan_recuperado)} operaciones."
+                            )
+                            st.session_state["seccion_limpieza"] = (
+                                f"Plan de limpieza ({len(plan_recuperado)})"
+                            )
+                            st.rerun()
+
+
+def _mostrar_resumen_simulacion(
+    datos_simulados: pd.DataFrame,
+    ejecucion: Any,
+) -> None:
+    """Muestra el resumen enriquecido V6.2 de una simulación ya ejecutada."""
+    try:
+        resumen = resumir_simulacion(ejecucion)
+    except CleaningSimulationError as exc:
+        st.warning(
+            "La simulación se ejecutó, pero no se pudo construir su resumen "
+            f"enriquecido: {exc}"
+        )
+        st.dataframe(
+            datos_simulados.head(20),
+            use_container_width=True,
+            hide_index=True,
+        )
+        return
+
+    a, b, c = st.columns(3)
+    a.metric("Filas antes", resumen.rows_before)
+    b.metric("Filas previstas", resumen.rows_after)
+    c.metric("Filas eliminadas", resumen.rows_removed)
+
+    d, e, f = st.columns(3)
+    d.metric("Operaciones solicitadas", resumen.operations_requested)
+    e.metric("Operaciones ejecutadas", resumen.operations_executed)
+    f.metric("Con impacto", resumen.operations_with_impact)
+
+    g, h, i = st.columns(3)
+    g.metric("Sin impacto", resumen.operations_without_impact)
+    h.metric("Registros afectados*", resumen.total_affected_records)
+    i.metric("Columnas eliminadas", resumen.columns_removed)
+
+    st.caption(
+        "* Registros afectados es la suma del impacto de cada operación; una "
+        "misma fila puede contabilizarse más de una vez."
+    )
+
+    if resumen.warnings:
+        st.warning(
+            "La simulación ha generado advertencias. Revísalas antes de "
+            "aplicar el plan."
+        )
+        for advertencia in resumen.warnings:
+            st.caption(f"• {advertencia}")
+    else:
+        st.success(
+            f"Plan ejecutable: {resumen.operations_executed} operaciones "
+            "simuladas sin advertencias."
+        )
+
+    if resumen.impacts:
+        tabla_impactos = pd.DataFrame(
+            [
+                {
+                    "#": numero,
+                    "Familia": impacto.family,
+                    "Operación": NOMBRES_OPERACIONES.get(
+                        impacto.operation_type,
+                        impacto.operation_type.replace("_", " ").capitalize(),
+                    ),
+                    "Columna": impacto.column_name or "Dataset completo",
+                    "Registros afectados": impacto.affected_records,
+                    "Filas eliminadas": impacto.rows_removed,
+                    "Impacto": "Sí" if impacto.changed else "No",
+                    "Advertencias": " · ".join(impacto.warnings) or "—",
+                }
+                for numero, impacto in enumerate(resumen.impacts, start=1)
+            ]
+        )
+        with st.expander("Impacto por operación", expanded=True):
+            st.dataframe(
+                tabla_impactos,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with st.expander("Vista previa del dataset simulado"):
+        st.dataframe(
+            datos_simulados.head(20),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.caption(
+        "La simulación confirma que el plan puede ejecutarse sobre una copia. "
+        "Para hacerlo definitivo, utiliza el bloque Aplicar limpieza."
+    )
+
+
 def _mostrar_plan(
     datos: pd.DataFrame,
     plan: CleaningPlan,
 ) -> None:
     st.subheader("Plan de limpieza")
 
+    _mostrar_planes_reutilizables(plan)
+    st.divider()
+    _mostrar_reproducibilidad(plan)
+    st.divider()
+
     if plan.esta_vacio():
         st.info(
-            "Todavía no has añadido ninguna operación al plan."
+            "Todavía no has añadido ninguna operación al plan. Puedes crear "
+            "uno desde las secciones de limpieza o cargar un plan JSON "
+            "reutilizable."
         )
         return
 
@@ -1341,13 +2210,19 @@ def _mostrar_plan(
                 datos,
                 plan,
             )
-        except (CleaningError, CleaningPlanError) as exc:
+            resumen = resumir_simulacion(ejecucion)
+        except (
+            CleaningError,
+            CleaningPlanError,
+            CleaningSimulationError,
+        ) as exc:
             st.session_state.pop("simulacion_limpieza", None)
             st.error(f"No se puede ejecutar el plan: {exc}")
         else:
             st.session_state["simulacion_limpieza"] = {
                 "datos": datos_simulados,
                 "resultado": ejecucion,
+                "resumen": resumen,
             }
             st.session_state["seccion_limpieza"] = (
                 f"Plan de limpieza ({len(plan)})"
@@ -1356,32 +2231,15 @@ def _mostrar_plan(
 
     simulacion = st.session_state.get("simulacion_limpieza")
     if simulacion is not None:
-        datos_simulados = simulacion["datos"]
-        ejecucion = simulacion["resultado"]
-
-        a, b, c = st.columns(3)
-        a.metric("Filas antes", len(datos))
-        b.metric("Filas previstas", len(datos_simulados))
-        c.metric(
-            "Filas eliminadas",
-            len(datos) - len(datos_simulados),
-        )
-
-        st.success(
-            f"Plan ejecutable: "
-            f"{len(ejecucion.ejecuciones)} operaciones simuladas."
-        )
-
-        st.dataframe(
-            datos_simulados.head(20),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.caption(
-            "La simulación confirma que el plan puede ejecutarse sobre una "
-            "copia. Para hacerlo definitivo, utiliza el bloque Aplicar limpieza."
-        )
+        datos_simulados = simulacion.get("datos")
+        ejecucion = simulacion.get("resultado")
+        if isinstance(datos_simulados, pd.DataFrame) and ejecucion is not None:
+            _mostrar_resumen_simulacion(datos_simulados, ejecucion)
+        else:
+            st.warning(
+                "La simulación guardada no es válida. Vuelve a simular el "
+                "plan antes de aplicarlo."
+            )
 
 
 
@@ -1599,7 +2457,7 @@ def _preparar_archivos_exportacion(
     resultado_limpio: dict[str, Any],
     resultado_limpieza: Any,
 ) -> dict[str, Any]:
-    """Genera en memoria el dataset limpio y los informes V5.5."""
+    """Genera en memoria el dataset limpio y los informes de limpieza."""
     nombre_archivo = st.session_state.get(
         "archivo_auditoria",
         resultado_original.get("dataset", {}).get("archivo", "dataset.csv"),
@@ -1609,7 +2467,7 @@ def _preparar_archivos_exportacion(
     if not isinstance(bytes_original, (bytes, bytearray)):
         raise ErrorExportacionLimpieza(
             "No se conserva una copia del archivo original en esta sesión. "
-            "Vuelve a auditar el archivo para habilitar la exportación V5.5."
+            "Vuelve a auditar el archivo para habilitar la exportación."
         )
 
     hoja = st.session_state.get("hoja_auditoria")
@@ -1727,7 +2585,7 @@ def _mostrar_aplicacion_final(
     resultado: dict[str, Any],
     plan: CleaningPlan,
 ) -> None:
-    """Muestra confirmación, aplicación y reauditoría de cierre de V5.4."""
+    """Muestra confirmación, aplicación y reauditoría de cierre."""
     st.divider()
     st.subheader("Aplicar limpieza")
 
@@ -1797,6 +2655,7 @@ def mostrar_preparar_limpieza() -> None:
 
     etiqueta_plan = f"Plan de limpieza ({len(plan)})"
     secciones = [
+        "Recomendaciones",
         "Texto",
         "Sustituciones",
         "Nulos",
@@ -1804,13 +2663,14 @@ def mostrar_preparar_limpieza() -> None:
         "Outliers",
         "Duplicados",
         etiqueta_plan,
+        "Reproducibilidad",
     ]
 
-    seccion_guardada = st.session_state.get("seccion_limpieza", "Texto")
+    seccion_guardada = st.session_state.get("seccion_limpieza", "Recomendaciones")
     if seccion_guardada.startswith("Plan de limpieza"):
         seccion_guardada = etiqueta_plan
     if seccion_guardada not in secciones:
-        seccion_guardada = "Texto"
+        seccion_guardada = "Recomendaciones"
 
     seccion = st.radio(
         "Sección de limpieza",
@@ -1822,7 +2682,9 @@ def mostrar_preparar_limpieza() -> None:
     )
     st.session_state["seccion_limpieza"] = seccion
 
-    if seccion == "Texto":
+    if seccion == "Recomendaciones":
+        _mostrar_recomendaciones(resultado, plan)
+    elif seccion == "Texto":
         _mostrar_texto(datos, resultado, plan)
     elif seccion == "Sustituciones":
         _mostrar_sustituciones(datos, resultado, plan)
@@ -1834,6 +2696,9 @@ def mostrar_preparar_limpieza() -> None:
         _mostrar_outliers(datos, resultado, plan)
     elif seccion == "Duplicados":
         _mostrar_duplicados(datos, resultado, plan)
-    else:
+    elif seccion == etiqueta_plan:
         _mostrar_plan(datos, plan)
         _mostrar_aplicacion_final(datos, resultado, plan)
+    else:
+        _mostrar_reproducibilidad(plan)
+

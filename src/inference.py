@@ -107,9 +107,54 @@ def _contiene_componente_horario(serie: pd.Series) -> bool:
     )
 
 
+def _confianza_por_evidencia(
+    *,
+    evidencia_completa: bool,
+    cantidad_evidencias: int,
+    minimo_evidencias_confianza_alta: int,
+) -> InferenceConfidence:
+    """
+    Asigna confianza a inferencias basadas en evidencia cuantificable.
+
+    Una evidencia completa solo alcanza confianza ALTA cuando existe
+    una cantidad mínima de observaciones analizables. Una muestra
+    limitada mantiene como máximo confianza MEDIA.
+    """
+    if (
+        evidencia_completa
+        and cantidad_evidencias
+        >= minimo_evidencias_confianza_alta
+    ):
+        return InferenceConfidence.HIGH
+
+    return InferenceConfidence.MEDIUM
+
+
+def _evidencia_muestra_limitada(
+    *,
+    cantidad_evidencias: int,
+    minimo_evidencias_confianza_alta: int,
+) -> tuple[str, ...]:
+    """Explica cuándo la cantidad de evidencia limita la confianza."""
+    if (
+        cantidad_evidencias
+        >= minimo_evidencias_confianza_alta
+    ):
+        return ()
+
+    return (
+        (
+            f"Solo existen {cantidad_evidencias} valores analizables; "
+            "la cantidad de evidencia limita la confianza de la "
+            "inferencia."
+        ),
+    )
+
+
 def _inferir_identificador(
     analisis: ColumnAnalysis,
     umbral_unicidad: float,
+    minimo_evidencias_confianza_alta: int,
 ) -> SemanticInference | None:
     """Evalúa si una columna presenta evidencias suficientes de identificador."""
     nombre_indicativo = nombre_indica_identificador(analisis.name)
@@ -120,23 +165,42 @@ def _inferir_identificador(
     if analisis.unique_ratio < umbral_unicidad:
         return None
 
-    confianza = (
-        InferenceConfidence.HIGH
-        if analisis.unique_ratio == 100.0
-        else InferenceConfidence.MEDIUM
+    confianza = _confianza_por_evidencia(
+        evidencia_completa=(
+            analisis.unique_ratio == 100.0
+        ),
+        cantidad_evidencias=(
+            analisis.analyzable_count
+        ),
+        minimo_evidencias_confianza_alta=(
+            minimo_evidencias_confianza_alta
+        ),
+    )
+
+    evidencia = [
+        "El nombre de la columna sugiere un identificador.",
+        (
+            "La proporción de valores únicos es "
+            f"{analisis.unique_ratio:.2f}%."
+        ),
+    ]
+
+    evidencia.extend(
+        _evidencia_muestra_limitada(
+            cantidad_evidencias=(
+                analisis.analyzable_count
+            ),
+            minimo_evidencias_confianza_alta=(
+                minimo_evidencias_confianza_alta
+            ),
+        )
     )
 
     return SemanticInference(
         column_name=analisis.name,
         semantic_type=SemanticType.IDENTIFIER,
         confidence=confianza,
-        evidence=(
-            "El nombre de la columna sugiere un identificador.",
-            (
-                "La proporción de valores únicos es "
-                f"{analisis.unique_ratio:.2f}%."
-            ),
-        ),
+        evidence=tuple(evidencia),
     )
 
 
@@ -186,6 +250,7 @@ def _inferir_booleano(
 def _inferir_temporal(
     analisis: ColumnAnalysis,
     umbral_fecha: float,
+    minimo_evidencias_confianza_alta: int,
 ) -> SemanticInference | None:
     """Evalúa las evidencias de fecha o fecha-hora."""
     conversion = analisis.datetime_conversion
@@ -196,33 +261,55 @@ def _inferir_temporal(
     if conversion.success_ratio < umbral_fecha:
         return None
 
-    confianza = (
-        InferenceConfidence.HIGH
-        if conversion.success_ratio == 100.0
-        else InferenceConfidence.MEDIUM
+    confianza = _confianza_por_evidencia(
+        evidencia_completa=(
+            conversion.success_ratio == 100.0
+        ),
+        cantidad_evidencias=(
+            conversion.attempted_count
+        ),
+        minimo_evidencias_confianza_alta=(
+            minimo_evidencias_confianza_alta
+        ),
     )
 
     tipo = (
         SemanticType.DATETIME
-        if _contiene_componente_horario(conversion.converted_series)
+        if _contiene_componente_horario(
+            conversion.converted_series
+        )
         else SemanticType.DATE
+    )
+
+    evidencia = [
+        (
+            "La conversión temporal tuvo un éxito del "
+            f"{conversion.success_ratio:.2f}%."
+        )
+    ]
+
+    evidencia.extend(
+        _evidencia_muestra_limitada(
+            cantidad_evidencias=(
+                conversion.attempted_count
+            ),
+            minimo_evidencias_confianza_alta=(
+                minimo_evidencias_confianza_alta
+            ),
+        )
     )
 
     return SemanticInference(
         column_name=analisis.name,
         semantic_type=tipo,
         confidence=confianza,
-        evidence=(
-            (
-                "La conversión temporal tuvo un éxito del "
-                f"{conversion.success_ratio:.2f}%."
-            ),
-        ),
+        evidence=tuple(evidencia),
     )
 
 
 def _inferir_numerico(
     analisis: ColumnAnalysis,
+    minimo_evidencias_confianza_alta: int,
 ) -> SemanticInference | None:
     """Evalúa las evidencias de contenido numérico."""
     conversion = analisis.numeric_conversion
@@ -233,22 +320,41 @@ def _inferir_numerico(
     if conversion.success_ratio < 80.0:
         return None
 
-    confianza = (
-        InferenceConfidence.HIGH
-        if conversion.success_ratio == 100.0
-        else InferenceConfidence.MEDIUM
+    confianza = _confianza_por_evidencia(
+        evidencia_completa=(
+            conversion.success_ratio == 100.0
+        ),
+        cantidad_evidencias=(
+            conversion.attempted_count
+        ),
+        minimo_evidencias_confianza_alta=(
+            minimo_evidencias_confianza_alta
+        ),
+    )
+
+    evidencia = [
+        (
+            "La conversión numérica tuvo un éxito del "
+            f"{conversion.success_ratio:.2f}%."
+        )
+    ]
+
+    evidencia.extend(
+        _evidencia_muestra_limitada(
+            cantidad_evidencias=(
+                conversion.attempted_count
+            ),
+            minimo_evidencias_confianza_alta=(
+                minimo_evidencias_confianza_alta
+            ),
+        )
     )
 
     return SemanticInference(
         column_name=analisis.name,
         semantic_type=SemanticType.NUMERIC,
         confidence=confianza,
-        evidence=(
-            (
-                "La conversión numérica tuvo un éxito del "
-                f"{conversion.success_ratio:.2f}%."
-            ),
-        ),
+        evidence=tuple(evidencia),
     )
 
 
@@ -256,6 +362,7 @@ def _inferir_categorico(
     analisis: ColumnAnalysis,
     max_categorias: int,
     max_porcentaje_categorias: float,
+    minimo_evidencias_confianza_alta: int,
 ) -> SemanticInference | None:
     """Evalúa si una columna presenta baja cardinalidad categórica."""
     if analisis.analyzable_count == 0:
@@ -265,24 +372,45 @@ def _inferir_categorico(
         analisis.unique_count <= max_categorias
         and analisis.unique_ratio <= max_porcentaje_categorias
     ):
+        confianza = (
+            InferenceConfidence.HIGH
+            if (
+                analisis.analyzable_count
+                >= minimo_evidencias_confianza_alta
+            )
+            else InferenceConfidence.MEDIUM
+        )
+
+        evidencia = [
+            (
+                f"La columna contiene {analisis.unique_count} valores "
+                "distintos."
+            ),
+            (
+                "La proporción de valores distintos es "
+                f"{analisis.unique_ratio:.2f}%."
+            ),
+        ]
+
+        evidencia.extend(
+            _evidencia_muestra_limitada(
+                cantidad_evidencias=(
+                    analisis.analyzable_count
+                ),
+                minimo_evidencias_confianza_alta=(
+                    minimo_evidencias_confianza_alta
+                ),
+            )
+        )
+
         return SemanticInference(
             column_name=analisis.name,
             semantic_type=SemanticType.CATEGORICAL,
-            confidence=InferenceConfidence.HIGH,
-            evidence=(
-                (
-                    f"La columna contiene {analisis.unique_count} valores "
-                    "distintos."
-                ),
-                (
-                    "La proporción de valores distintos es "
-                    f"{analisis.unique_ratio:.2f}%."
-                ),
-            ),
+            confidence=confianza,
+            evidence=tuple(evidencia),
         )
 
     return None
-
 
 
 def _crear_inferencia_declarada(
@@ -311,6 +439,7 @@ def inferir_tipo_semantico(
     umbral_fecha: float = 80.0,
     max_categorias: int = 20,
     max_porcentaje_categorias: float = 20.0,
+    minimo_evidencias_confianza_alta: int = 3,
 ) -> SemanticInference:
     """
     Determina el tipo semántico de una columna.
@@ -319,6 +448,15 @@ def inferir_tipo_semantico(
     se aplica la jerarquía:
     identificador -> booleano/binario -> fecha/fecha-hora ->
     numérico -> categórico -> texto libre.
+
+    La confianza es cualitativa y expresa la solidez de las evidencias
+    disponibles. No representa una puntuación de calidad ni una
+    probabilidad estadística.
+
+    Las inferencias basadas en unicidad, conversión o cardinalidad
+    requieren una cantidad mínima de evidencias para alcanzar confianza
+    ALTA. Los tipos declarados y los patrones booleanos inequívocos
+    mantienen confianza ALTA independientemente del tamaño de la muestra.
     """
     if tipo_declarado is not None:
         return _crear_inferencia_declarada(
@@ -329,6 +467,9 @@ def inferir_tipo_semantico(
     inferencia = _inferir_identificador(
         analisis,
         umbral_unicidad=umbral_unicidad,
+        minimo_evidencias_confianza_alta=(
+            minimo_evidencias_confianza_alta
+        ),
     )
 
     if inferencia is not None:
@@ -345,12 +486,20 @@ def inferir_tipo_semantico(
     inferencia = _inferir_temporal(
         analisis,
         umbral_fecha=umbral_fecha,
+        minimo_evidencias_confianza_alta=(
+            minimo_evidencias_confianza_alta
+        ),
     )
 
     if inferencia is not None:
         return inferencia
 
-    inferencia = _inferir_numerico(analisis)
+    inferencia = _inferir_numerico(
+        analisis,
+        minimo_evidencias_confianza_alta=(
+            minimo_evidencias_confianza_alta
+        ),
+    )
 
     if inferencia is not None:
         return inferencia
@@ -359,6 +508,9 @@ def inferir_tipo_semantico(
         analisis,
         max_categorias=max_categorias,
         max_porcentaje_categorias=max_porcentaje_categorias,
+        minimo_evidencias_confianza_alta=(
+            minimo_evidencias_confianza_alta
+        ),
     )
 
     if inferencia is not None:

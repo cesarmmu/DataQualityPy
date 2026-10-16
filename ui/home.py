@@ -1,4 +1,4 @@
-"""Pantalla principal de DataQualityPy V4."""
+"""Pantalla principal de DataQualityPy V6."""
 
 import streamlit as st
 

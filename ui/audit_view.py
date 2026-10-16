@@ -1,4 +1,4 @@
-"""Pantalla de auditoría de DataQualityPy V4."""
+"""Pantalla de auditoría de DataQualityPy V6."""
 
 from pathlib import Path
 import tempfile
@@ -75,7 +75,7 @@ def _ejecutar_auditoria(
     hoja: str | None = None,
     configuracion_usuario: dict | None = None,
 ) -> tuple:
-    """Adapta el archivo de Streamlit y ejecuta el motor V3."""
+    """Adapta el archivo de Streamlit y ejecuta el motor de auditoría."""
 
     datos = _cargar_datos(
         archivo_subido,

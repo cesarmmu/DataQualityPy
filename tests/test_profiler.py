@@ -4,8 +4,14 @@ import pandas as pd
 import pytest
 
 from src.column_analysis import analizar_columnas
-from src.inference import inferir_tipo_semantico
+from src.inference import (
+    InferenceConfidence,
+    SemanticInference,
+    SemanticType,
+    inferir_tipo_semantico,
+)
 from src.profiler import (
+    perfilar_columnas_semanticas,
     perfilar_dataset,
     perfilar_numericas,
     perfilar_numericas_semanticas,
@@ -43,6 +49,19 @@ def _generar_inferencias(
         "analisis": analisis_columnas,
         "inferencias": inferencias,
     }
+
+
+def _crear_inferencia(
+    columna: object,
+    tipo: SemanticType,
+) -> SemanticInference:
+    """Crea una inferencia controlada para aislar los tests del perfilador."""
+    return SemanticInference(
+        column_name=columna,
+        semantic_type=tipo,
+        confidence=InferenceConfidence.HIGH,
+        evidence=("Inferencia controlada para el test.",),
+    )
 
 
 def test_perfilar_dataset() -> None:
@@ -200,6 +219,299 @@ def test_perfilar_numericas_semanticas_no_modifica_datos() -> None:
     perfilar_numericas_semanticas(
         contexto["analisis"],
         contexto["inferencias"],
+    )
+
+    pd.testing.assert_frame_equal(
+        datos,
+        original,
+    )
+
+
+def test_perfil_enriquecido_incluye_metricas_comunes_v6() -> None:
+    """
+    El perfil V6 debe exponer cobertura, cardinalidad,
+    frecuencia y repetición.
+    """
+    datos = pd.DataFrame(
+        {
+            "ciudad": [
+                "Madrid",
+                "Madrid",
+                "Sevilla",
+                "NA",
+                None,
+            ],
+        }
+    )
+
+    analisis = analizar_columnas(datos)
+
+    inferencias = {
+        "ciudad": _crear_inferencia(
+            "ciudad",
+            SemanticType.CATEGORICAL,
+        )
+    }
+
+    resultado = perfilar_columnas_semanticas(
+        analisis,
+        inferencias,
+    )
+
+    comun = resultado["ciudad"]["comun"]
+
+    assert comun["filas"] == 5
+    assert comun["valores_analizables"] == 3
+    assert comun["cobertura_porcentaje"] == pytest.approx(60.0)
+
+    assert comun["nulos_reales"] == 1
+    assert comun["nulos_textuales"] == 1
+    assert comun["nulos_totales"] == 2
+    assert comun["nulos_porcentaje"] == pytest.approx(40.0)
+
+    assert comun["valores_distintos"] == 2
+    assert comun["unicidad_porcentaje"] == pytest.approx(200 / 3)
+
+    assert comun["valor_mas_frecuente"] == "Madrid"
+    assert comun["frecuencia_mas_alta"] == 2
+    assert comun["frecuencia_mas_alta_porcentaje"] == pytest.approx(
+        200 / 3
+    )
+
+    assert comun["valores_en_repeticion"] == 2
+    assert comun["repeticion_porcentaje"] == pytest.approx(
+        200 / 3
+    )
+
+    assert comun["exceso_duplicados"] == 1
+    assert comun["exceso_duplicados_porcentaje"] == pytest.approx(
+        100 / 3
+    )
+
+
+def test_perfil_enriquecido_numerico_v6() -> None:
+    """El perfil numérico V6 debe reutilizar la conversión ya calculada."""
+    datos = pd.DataFrame(
+        {
+            "importe": ["10", "20", "error", "30"],
+        },
+        dtype="object",
+    )
+
+    analisis = analizar_columnas(datos)
+
+    inferencias = {
+        "importe": _crear_inferencia(
+            "importe",
+            SemanticType.NUMERIC,
+        )
+    }
+
+    resultado = perfilar_columnas_semanticas(
+        analisis,
+        inferencias,
+    )
+
+    especifico = resultado["importe"]["especifico"]
+
+    assert especifico["valores_convertibles"] == 3
+    assert especifico["valores_no_convertibles"] == 1
+    assert especifico["conversion_porcentaje"] == pytest.approx(75.0)
+    assert especifico["minimo"] == pytest.approx(10.0)
+    assert especifico["maximo"] == pytest.approx(30.0)
+    assert especifico["media"] == pytest.approx(20.0)
+    assert especifico["mediana"] == pytest.approx(20.0)
+    assert especifico["rango"] == pytest.approx(20.0)
+
+
+def test_perfil_enriquecido_categorico_v6() -> None:
+    """El perfil categórico V6 debe describir categorías y dominancia."""
+    datos = pd.DataFrame(
+        {
+            "estado": [
+                "Activo",
+                "Activo",
+                "Pendiente",
+                "Activo",
+                "Cerrado",
+            ],
+        }
+    )
+
+    analisis = analizar_columnas(datos)
+
+    inferencias = {
+        "estado": _crear_inferencia(
+            "estado",
+            SemanticType.CATEGORICAL,
+        )
+    }
+
+    resultado = perfilar_columnas_semanticas(
+        analisis,
+        inferencias,
+    )
+
+    especifico = resultado["estado"]["especifico"]
+
+    assert especifico["numero_categorias"] == 3
+    assert especifico["categoria_dominante"] == "Activo"
+    assert especifico["frecuencia_dominante"] == 3
+    assert especifico[
+        "frecuencia_dominante_porcentaje"
+    ] == pytest.approx(60.0)
+
+
+def test_perfil_enriquecido_temporal_v6() -> None:
+    """El perfil temporal V6 debe describir conversión y rango de fechas."""
+    datos = pd.DataFrame(
+        {
+            "fecha": [
+                "01/01/2026",
+                "15/01/2026",
+                "fecha_invalida",
+                "31/01/2026",
+            ],
+        },
+        dtype="object",
+    )
+
+    analisis = analizar_columnas(datos)
+
+    inferencias = {
+        "fecha": _crear_inferencia(
+            "fecha",
+            SemanticType.DATE,
+        )
+    }
+
+    resultado = perfilar_columnas_semanticas(
+        analisis,
+        inferencias,
+    )
+
+    especifico = resultado["fecha"]["especifico"]
+
+    assert especifico["valores_convertibles"] == 3
+    assert especifico["valores_no_convertibles"] == 1
+    assert especifico["conversion_porcentaje"] == pytest.approx(75.0)
+    assert especifico["fecha_minima"] == pd.Timestamp("2026-01-01")
+    assert especifico["fecha_maxima"] == pd.Timestamp("2026-01-31")
+    assert especifico["rango_temporal"] == pd.Timedelta(days=30)
+
+
+def test_perfil_enriquecido_texto_libre_v6() -> None:
+    """El perfil de texto libre V6 debe describir longitudes."""
+    datos = pd.DataFrame(
+        {
+            "comentario": [
+                "Hola",
+                "Texto medio",
+                "Comentario bastante largo",
+            ],
+        }
+    )
+
+    analisis = analizar_columnas(datos)
+
+    inferencias = {
+        "comentario": _crear_inferencia(
+            "comentario",
+            SemanticType.FREE_TEXT,
+        )
+    }
+
+    resultado = perfilar_columnas_semanticas(
+        analisis,
+        inferencias,
+    )
+
+    especifico = resultado["comentario"]["especifico"]
+
+    longitudes = datos["comentario"].str.len()
+
+    assert especifico["longitud_minima"] == int(
+        longitudes.min()
+    )
+    assert especifico["longitud_maxima"] == int(
+        longitudes.max()
+    )
+    assert especifico["longitud_media"] == pytest.approx(
+        float(longitudes.mean())
+    )
+
+
+def test_perfil_enriquecido_identificador_v6() -> None:
+    """El perfil de identificador debe centrarse en unicidad y duplicación."""
+    datos = pd.DataFrame(
+        {
+            "cliente_id": [
+                "C001",
+                "C002",
+                "C002",
+                "C003",
+            ],
+        }
+    )
+
+    analisis = analizar_columnas(datos)
+
+    inferencias = {
+        "cliente_id": _crear_inferencia(
+            "cliente_id",
+            SemanticType.IDENTIFIER,
+        )
+    }
+
+    resultado = perfilar_columnas_semanticas(
+        analisis,
+        inferencias,
+    )
+
+    especifico = resultado["cliente_id"]["especifico"]
+
+    assert especifico["valores_distintos"] == 3
+    assert especifico["unicidad_porcentaje"] == pytest.approx(75.0)
+    assert especifico["valores_duplicados"] == 1
+    assert especifico["duplicados_porcentaje"] == pytest.approx(
+        25.0
+    )
+
+    assert "media" not in especifico
+    assert "mediana" not in especifico
+
+
+def test_perfil_enriquecido_no_modifica_datos_v6() -> None:
+    """El perfilado enriquecido no debe modificar el dataset original."""
+    datos = pd.DataFrame(
+        {
+            "importe": ["10", "20", "error", "30"],
+            "ciudad": [
+                "Madrid",
+                "Madrid",
+                "Sevilla",
+                "Bilbao",
+            ],
+        }
+    )
+
+    original = datos.copy(deep=True)
+    analisis = analizar_columnas(datos)
+
+    inferencias = {
+        "importe": _crear_inferencia(
+            "importe",
+            SemanticType.NUMERIC,
+        ),
+        "ciudad": _crear_inferencia(
+            "ciudad",
+            SemanticType.CATEGORICAL,
+        ),
+    }
+
+    perfilar_columnas_semanticas(
+        analisis,
+        inferencias,
     )
 
     pd.testing.assert_frame_equal(

@@ -147,7 +147,7 @@ def _validar_parametros(
         conservar = parametros.get("conservar", "primero")
         if conservar != "primero":
             raise CleaningPlanError(
-                "En V5 los duplicados completos solo pueden eliminarse "
+                "Los duplicados completos solo pueden eliminarse "
                 "conservando la primera aparición."
             )
 
@@ -324,7 +324,7 @@ class CleaningPlan:
 
     def operaciones_ordenadas(self) -> list[CleaningOperation]:
         """
-        Devuelve las operaciones en el orden lógico de ejecución de V5.
+        Devuelve las operaciones en el orden lógico de ejecución.
 
         Dentro de una misma familia se conserva el orden en el que las
         operaciones fueron añadidas al plan.
@@ -356,3 +356,4 @@ class CleaningPlan:
                 for operacion in operaciones
             ],
         }
+

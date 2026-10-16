@@ -1,4 +1,4 @@
-"""Exportación del dataset limpio de DataQualityPy V5."""
+"""Exportación del dataset limpio de DataQualityPy V6."""
 
 from __future__ import annotations
 
@@ -219,3 +219,4 @@ def exportar_dataset_limpio(
     raise ErrorExportacionLimpieza(
         f"Formato no compatible: '{original.suffix}'."
     )
+

@@ -1,4 +1,4 @@
-"""Informes de trazabilidad de limpieza de DataQualityPy V5."""
+"""Informes de trazabilidad de limpieza de DataQualityPy V6."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def _incidencias(resultado_auditoria: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _identidad_incidencia(incidencia: dict[str, Any]) -> tuple[str, str, str]:
-    """Define la identidad funcional usada en la verificación V5."""
+    """Define la identidad funcional usada en la verificación de limpieza."""
     return (
         str(incidencia.get("tipo", "")),
         str(incidencia.get("categoria", "")),
@@ -153,7 +153,7 @@ def construir_trazabilidad_limpieza(
     trazabilidad = {
         "metadatos": {
             "aplicacion": "DataQualityPy",
-            "version": "V5",
+            "version": "V6",
             "generado_en": instante.isoformat(),
             "original_modificado": False,
         },
@@ -357,3 +357,4 @@ def guardar_informes_limpieza(
         ) from error
 
     return ruta_json, ruta_html
+
