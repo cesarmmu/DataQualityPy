@@ -2,6 +2,10 @@
 
 import pandas as pd
 
+from src.cleaning import CleaningResult
+from src.reaudit import IncidentComparison, ReauditComparison, ReauditResult
+from src.reproducibility import crear_manifiesto
+
 from src.html_report import (
     generar_informe_html,
     generar_mapa_nulos_html,
@@ -410,3 +414,222 @@ def test_html_v3_sin_incidencias_mantiene_resumen_semantico_y_cobertura(
     assert "Identificador" in contenido
     assert "Categórico" in contenido
 
+
+
+def test_html_v7_muestra_analisis_avanzado_y_explicabilidad(tmp_path):
+    """Comprueba los bloques V7 de análisis avanzado y explicabilidad."""
+    datos = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "categoria": ["A", None, ""],
+        }
+    )
+    resultado = _crear_resultado_auditoria()
+    resultado["analisis_avanzado"] = {
+        "columnas": {
+            "categoria": {
+                "patrones_estructurales": {
+                    "analizados": 2,
+                    "patron_dominante": "A",
+                }
+            }
+        },
+        "claves_candidatas": [],
+        "distribuciones": {"categoria": {}},
+        "diagnosticos": [
+            {
+                "tipo_incidencia": "nulos_reales",
+                "categoria": "completitud",
+                "severidad": "media",
+                "columna": "categoria",
+                "mensaje_incidencia": "La columna contiene un valor nulo.",
+                "contexto": [],
+                "acciones_posibles": [],
+                "evidencias": [
+                    {
+                        "clave": "porcentaje_nulos",
+                        "etiqueta": "Porcentaje de nulos",
+                        "valor": 33.33,
+                        "fuente": "calidad.nulos",
+                    }
+                ],
+                "explicacion": "Se detectaron valores ausentes en la columna.",
+                "explicacion_severidad": "La proporción observada corresponde a severidad media.",
+            }
+        ],
+        "relaciones": {},
+    }
+    ruta_salida = tmp_path / "informe_v7.html"
+
+    generar_informe_html(resultado, datos, ruta_salida)
+
+    contenido = ruta_salida.read_text(encoding="utf-8")
+
+    assert "Análisis avanzado" in contenido
+    assert "Explicabilidad de los diagnósticos" in contenido
+    assert "¿Por qué se ha detectado?" in contenido
+    assert "¿Por qué tiene esta severidad?" in contenido
+    assert "Evidencias del diagnóstico" in contenido
+    assert "Porcentaje de nulos" in contenido
+    assert "33.33" in contenido
+    assert "Una anomalía o discrepancia observada no implica" in contenido
+
+
+def test_html_sin_analisis_avanzado_mantiene_compatibilidad(tmp_path):
+    """Comprueba que un resultado anterior a V7 sigue generando HTML."""
+    datos = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "categoria": ["A", "B", "C"],
+        }
+    )
+    resultado = _crear_resultado_auditoria()
+    ruta_salida = tmp_path / "informe_compatible.html"
+
+    generar_informe_html(resultado, datos, ruta_salida)
+
+    contenido = ruta_salida.read_text(encoding="utf-8")
+
+    assert "Resumen ejecutivo" in contenido
+    assert "Análisis avanzado" not in contenido
+    assert "Explicabilidad de los diagnósticos" not in contenido
+
+
+
+def test_html_v7_muestra_limpieza_y_reauditoria(tmp_path):
+    """Comprueba la comparación objetiva antes/después de V7."""
+    datos = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "categoria": ["A", None, ""],
+        }
+    )
+    resultado = _crear_resultado_auditoria()
+
+    incidencia_resuelta = {
+        "tipo": "nulos_reales",
+        "categoria": "completitud",
+        "severidad": "media",
+        "columna": "categoria",
+        "cantidad": 1,
+        "porcentaje": 33.33,
+        "mensaje": "Se detectó un valor nulo.",
+    }
+    persistente_antes = {
+        "tipo": "inconsistencia_texto",
+        "categoria": "consistencia",
+        "severidad": "baja",
+        "columna": "categoria",
+        "cantidad": 2,
+        "porcentaje": 66.67,
+        "mensaje": "Se detectaron variantes de texto.",
+    }
+    persistente_despues = {
+        **persistente_antes,
+        "cantidad": 1,
+        "porcentaje": 33.33,
+    }
+    incidencia_nueva = {
+        "tipo": "outliers",
+        "categoria": "validez",
+        "severidad": "baja",
+        "columna": "id",
+        "cantidad": 1,
+        "porcentaje": 33.33,
+        "mensaje": "Se observó un posible valor atípico.",
+    }
+
+    comparacion = ReauditComparison(
+        resolved=(incidencia_resuelta,),
+        persistent=(
+            IncidentComparison(
+                before=persistente_antes,
+                after=persistente_despues,
+            ),
+        ),
+        new=(incidencia_nueva,),
+    )
+    resultado_limpieza = CleaningResult(
+        filas_antes=3,
+        columnas_antes=2,
+        filas_despues=3,
+        columnas_despues=2,
+        operaciones_solicitadas=1,
+        operaciones_ejecutadas=0,
+        ejecuciones=[],
+    )
+    reauditoria = ReauditResult(
+        audit_before=resultado,
+        audit_after=resultado,
+        cleaning_result=resultado_limpieza,
+        comparison=comparacion,
+    )
+
+    ruta_salida = tmp_path / "informe_reauditoria_v7.html"
+    generar_informe_html(
+        resultado,
+        datos,
+        ruta_salida,
+        resultado_reauditoria=reauditoria,
+    )
+    contenido = ruta_salida.read_text(encoding="utf-8")
+
+    assert "Limpieza y reauditoría" in contenido
+    assert "Resueltas" in contenido
+    assert "Persistentes" in contenido
+    assert "Nuevas" in contenido
+    assert "antes 2 / 66.67%" in contenido
+    assert "después 1 / 33.33%" in contenido
+    assert "Persistente no significa fracaso" in contenido
+    assert "no se atribuye automáticamente a la limpieza" in contenido
+
+
+def test_html_v7_muestra_reproducibilidad(tmp_path):
+    """Comprueba la trazabilidad del manifiesto reproducible en HTML."""
+    datos = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "categoria": ["A", "B", "C"],
+        }
+    )
+    resultado = _crear_resultado_auditoria()
+    dataset = tmp_path / "datos.csv"
+    dataset.write_text("id,categoria\\n1,A\\n2,B\\n3,C\\n", encoding="utf-8")
+    manifiesto = crear_manifiesto(
+        dataset,
+        created_at="2026-10-18T12:00:00+02:00",
+    )
+
+    ruta_salida = tmp_path / "informe_reproducible_v7.html"
+    generar_informe_html(
+        resultado,
+        datos,
+        ruta_salida,
+        manifiesto_reproducibilidad=manifiesto,
+    )
+    contenido = ruta_salida.read_text(encoding="utf-8")
+
+    assert "Reproducibilidad" in contenido
+    assert "Reproducible no significa automático" in contenido
+    assert "datos.csv" in contenido
+    assert manifiesto.dataset.sha256 in contenido
+    assert "SHA-256" in contenido
+    assert manifiesto.format_version in contenido
+
+
+def test_html_v7_bloques_opcionales_no_aparecen_sin_contexto(tmp_path):
+    """Reauditoría y reproducibilidad no se inventan si no existen."""
+    datos = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "categoria": ["A", "B", "C"],
+        }
+    )
+    resultado = _crear_resultado_auditoria()
+    ruta_salida = tmp_path / "informe_sin_contexto_v7.html"
+
+    generar_informe_html(resultado, datos, ruta_salida)
+    contenido = ruta_salida.read_text(encoding="utf-8")
+
+    assert "Limpieza y reauditoría" not in contenido
+    assert "Reproducibilidad" not in contenido

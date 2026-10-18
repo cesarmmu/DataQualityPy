@@ -741,7 +741,13 @@ def mostrar_incidencias(incidencias: list[dict]) -> None:
         )
 
 
-def generar_informe(resultado_auditoria: dict) -> None:
+def generar_informe(
+    resultado_auditoria: dict,
+    *,
+    resultado_reauditoria=None,
+    manifiesto_reproducibilidad=None,
+    verificacion_reproducibilidad=None,
+) -> None:
     """Genera el informe completo de auditoría en consola."""
     dataset = resultado_auditoria["dataset"]
     perfil = resultado_auditoria["perfil"]
@@ -777,6 +783,21 @@ def generar_informe(resultado_auditoria: dict) -> None:
     mostrar_incompatibilidades_semanticas(calidad)
     mostrar_reglas_negocio(calidad)
     mostrar_incidencias(incidencias)
+
+    from src.report_v7 import (
+        mostrar_analisis_avanzado,
+        mostrar_reauditoria,
+        mostrar_reproducibilidad,
+    )
+
+    mostrar_analisis_avanzado(
+        resultado_auditoria.get("analisis_avanzado")
+    )
+    mostrar_reauditoria(resultado_reauditoria)
+    mostrar_reproducibilidad(
+        manifiesto_reproducibilidad,
+        verificacion_reproducibilidad,
+    )
 
     print()
     print("=" * 60)

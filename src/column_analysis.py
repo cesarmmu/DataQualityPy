@@ -22,6 +22,18 @@ class ConversionAnalysis:
         return self.attempted_count - self.convertible_count
 
 
+@dataclass(frozen=True)
+class StructuralPatternAnalysis:
+    """Resultado descriptivo del análisis de patrones estructurales de texto."""
+
+    analyzed_count: int
+    dominant_pattern: str
+    dominant_count: int
+    dominant_ratio: float
+    distinct_pattern_count: int
+    pattern_frequencies: tuple[tuple[str, int], ...]
+
+
 @dataclass
 class ColumnAnalysis:
     """Evidencias técnicas obtenidas al analizar una columna."""
@@ -51,6 +63,7 @@ class ColumnAnalysis:
 
     numeric_conversion: ConversionAnalysis | None
     datetime_conversion: ConversionAnalysis | None
+    structural_patterns: StructuralPatternAnalysis | None
 
     @property
     def null_count(self) -> int:
@@ -304,6 +317,77 @@ def _analizar_conversion_datetime(
     )
 
 
+def _es_serie_textual(serie: pd.Series) -> bool:
+    """Indica si una serie puede analizarse como contenido textual."""
+    return bool(
+        pd.api.types.is_object_dtype(serie)
+        or isinstance(serie.dtype, pd.StringDtype)
+    )
+
+
+def _crear_patron_estructural(valor: object) -> str:
+    """Representa la estructura visible de un valor textual."""
+    texto = str(valor)
+    patron = []
+    for caracter in texto:
+        if caracter.isalpha():
+            patron.append("A")
+        elif caracter.isdigit():
+            patron.append("N")
+        elif caracter == " ":
+            patron.append("S")
+        else:
+            patron.append(caracter)
+    return "".join(patron)
+
+
+def _analizar_patrones_estructurales(
+    serie: pd.Series,
+    *,
+    longitud_maxima: int = 50,
+    minimo_valores: int = 3,
+) -> StructuralPatternAnalysis | None:
+    """Describe patrones estructurales observados en contenido textual."""
+    if serie.empty or not _es_serie_textual(serie):
+        return None
+
+    textos = serie.astype("string").dropna()
+    if len(textos) < minimo_valores:
+        return None
+
+    longitudes = textos.str.len()
+    dentro_limite = longitudes <= longitud_maxima
+    if float(dentro_limite.mean()) < 0.5:
+        return None
+
+    textos_analizables = textos.loc[dentro_limite]
+    if len(textos_analizables) < minimo_valores:
+        return None
+
+    patrones = textos_analizables.map(_crear_patron_estructural)
+    frecuencias = patrones.value_counts(dropna=False)
+    if frecuencias.empty:
+        return None
+
+    analyzed_count = len(patrones)
+    dominant_pattern = str(frecuencias.index[0])
+    dominant_count = int(frecuencias.iloc[0])
+    dominant_ratio = dominant_count / analyzed_count * 100
+    pattern_frequencies = tuple(
+        (str(patron), int(cantidad))
+        for patron, cantidad in frecuencias.items()
+    )
+
+    return StructuralPatternAnalysis(
+        analyzed_count=analyzed_count,
+        dominant_pattern=dominant_pattern,
+        dominant_count=dominant_count,
+        dominant_ratio=float(dominant_ratio),
+        distinct_pattern_count=len(frecuencias),
+        pattern_frequencies=pattern_frequencies,
+    )
+
+
 def analizar_columna(
     serie: pd.Series,
     nombre: object | None = None,
@@ -368,6 +452,12 @@ def analizar_columna(
         )
     )
 
+    structural_patterns = (
+        _analizar_patrones_estructurales(
+            serie_evaluable
+        )
+    )
+
     return ColumnAnalysis(
         name=nombre_columna,
         pandas_dtype=str(serie.dtype),
@@ -387,6 +477,7 @@ def analizar_columna(
         analyzable_series=serie_evaluable,
         numeric_conversion=numeric_conversion,
         datetime_conversion=datetime_conversion,
+        structural_patterns=structural_patterns,
     )
 
 

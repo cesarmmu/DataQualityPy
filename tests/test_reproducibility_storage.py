@@ -10,6 +10,9 @@ import pytest
 from src.cleaning_plan import CleaningOperation, CleaningPlan
 from src.reproducibility import (
     DatasetVerificationStatus,
+    LEGACY_MANIFEST_FORMAT_VERSION,
+    RuntimeEnvironment,
+    VerificationStatus,
     ExecutionManifest,
     ReproducibilityError,
     cargar_manifiesto,
@@ -18,6 +21,7 @@ from src.reproducibility import (
     manifiesto_desde_dict,
     reconstruir_plan_manifiesto,
     verificar_dataset,
+    verificar_reproducibilidad,
 )
 
 
@@ -564,3 +568,72 @@ def test_verificar_requiere_manifiesto_valido_v6(
             dataset,
             "manifiesto",  # type: ignore[arg-type]
         )
+
+def test_cargar_manifiesto_v6_sigue_siendo_compatible(tmp_path: Path) -> None:
+    _, actual = _crear_manifiesto_basico(tmp_path)
+    datos = actual.a_dict()
+    datos["format_version"] = LEGACY_MANIFEST_FORMAT_VERSION
+    datos.pop("environment")
+    cargado = manifiesto_desde_dict(datos)
+    assert cargado.format_version == LEGACY_MANIFEST_FORMAT_VERSION
+    assert cargado.environment is None
+    assert "environment" not in cargado.a_dict()
+
+
+def test_verificacion_reproducible_todo_coincide_v7(tmp_path: Path) -> None:
+    dataset = _crear_dataset(tmp_path)
+    plan = _crear_plan()
+    manifiesto = crear_manifiesto(
+        dataset, cleaning_plan=plan, cleaning_plan_name="Plan",
+        created_at="2026-10-14T10:00:00+02:00",
+    )
+    resultado = verificar_reproducibilidad(
+        manifiesto, dataset_path=dataset, audit_configuration={},
+        cleaning_plan=plan, environment=manifiesto.environment,
+    )
+    assert resultado.dataset.status is VerificationStatus.MATCH
+    assert resultado.audit_configuration.status is VerificationStatus.MATCH
+    assert resultado.cleaning_plan.status is VerificationStatus.MATCH
+    assert resultado.environment.status is VerificationStatus.MATCH
+    assert resultado.matches is True
+
+
+def test_verificacion_reproducible_detecta_diferencias_v7(tmp_path: Path) -> None:
+    dataset = _crear_dataset(tmp_path)
+    manifiesto = crear_manifiesto(
+        dataset, audit_configuration={"factor_iqr": 2.0},
+        created_at="2026-10-14T10:00:00+02:00",
+    )
+    dataset.write_text("id,nombre\n1,Ana\n3,Marta\n", encoding="utf-8")
+    entorno_distinto = RuntimeEnvironment(
+        dataqualitypy="0.0.0", python="0.0.0", packages={}
+    )
+    resultado = verificar_reproducibilidad(
+        manifiesto, dataset_path=dataset, audit_configuration={},
+        cleaning_plan=None, environment=entorno_distinto,
+    )
+    assert resultado.dataset.status is VerificationStatus.MISMATCH
+    assert resultado.audit_configuration.status is VerificationStatus.MISMATCH
+    assert resultado.cleaning_plan.status is VerificationStatus.MATCH
+    assert resultado.environment.status is VerificationStatus.MISMATCH
+    assert resultado.matches is False
+
+
+def test_verificacion_reproducible_no_infiere_contexto_ausente_v7(
+    tmp_path: Path,
+) -> None:
+    _, manifiesto = _crear_manifiesto_basico(tmp_path)
+    resultado = verificar_reproducibilidad(manifiesto)
+    assert resultado.dataset.status is VerificationStatus.UNAVAILABLE
+    assert resultado.audit_configuration.status is VerificationStatus.UNAVAILABLE
+    assert resultado.cleaning_plan.status is VerificationStatus.UNAVAILABLE
+
+
+def test_manifiesto_v6_entorno_no_disponible_v7(tmp_path: Path) -> None:
+    _, actual = _crear_manifiesto_basico(tmp_path)
+    datos = actual.a_dict()
+    datos["format_version"] = LEGACY_MANIFEST_FORMAT_VERSION
+    datos.pop("environment")
+    legado = manifiesto_desde_dict(datos)
+    resultado = verificar_reproducibilidad(legado)
+    assert resultado.environment.status is VerificationStatus.UNAVAILABLE

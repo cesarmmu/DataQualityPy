@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.quality import es_nulo_textual
+from src.html_report_v7 import generar_bloques_v7_html
 
 
 MAX_FILAS_MAPA = 200
@@ -1537,6 +1538,9 @@ def _obtener_estilos_html() -> str:
 def generar_documento_html(
     resultado_auditoria: dict,
     datos: pd.DataFrame,
+    *,
+    resultado_reauditoria=None,
+    manifiesto_reproducibilidad=None,
 ) -> str:
     """Construye el documento HTML completo de la auditoría."""
     dataset = resultado_auditoria["dataset"]
@@ -1588,6 +1592,12 @@ def generar_documento_html(
 
         {_generar_outliers_html(calidad)}
 
+        {generar_bloques_v7_html(
+            resultado_auditoria,
+            resultado_reauditoria=resultado_reauditoria,
+            manifiesto_reproducibilidad=manifiesto_reproducibilidad,
+        )}
+
         <footer class="pie-informe">
             Generado por DataQualityPy
         </footer>
@@ -1601,6 +1611,9 @@ def generar_informe_html(
     resultado_auditoria: dict,
     datos: pd.DataFrame,
     ruta_salida: str | Path,
+    *,
+    resultado_reauditoria=None,
+    manifiesto_reproducibilidad=None,
 ) -> Path:
     """Genera y guarda el informe de auditoría en formato HTML."""
     ruta_salida = Path(ruta_salida)
@@ -1613,6 +1626,8 @@ def generar_informe_html(
     contenido = generar_documento_html(
         resultado_auditoria,
         datos,
+        resultado_reauditoria=resultado_reauditoria,
+        manifiesto_reproducibilidad=manifiesto_reproducibilidad,
     )
 
     ruta_salida.write_text(

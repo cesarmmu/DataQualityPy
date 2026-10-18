@@ -301,3 +301,69 @@ def test_generar_informe_integra_secciones_v3(capsys) -> None:
     assert "14. REGLAS DE NEGOCIO" in salida
     assert "15. INCIDENCIAS DETECTADAS" in salida
     assert "FIN DEL INFORME" in salida
+
+
+def test_generar_informe_v7_muestra_explicabilidad(capsys) -> None:
+    resultado = {
+        "dataset": _dataset(), "perfil": _perfil(),
+        "tipos_semanticos": _tipos_semanticos(), "calidad": _calidad(),
+        "incidencias": _incidencias(), "resumen": _resumen(),
+        "analisis_avanzado": {
+            "diagnosticos": [{
+                "tipo_incidencia": "incompatibilidad_tipo",
+                "columna": "Age",
+                "explicacion": "Se observaron valores no compatibles.",
+                "explicacion_severidad": "Afecta al 25 % de los valores.",
+                "evidencias": [{"clave": "ratio", "etiqueta": "Porcentaje", "valor": "25 %", "fuente": "calidad"}],
+            }]
+        },
+    }
+    generar_informe(resultado)
+    salida = capsys.readouterr().out
+    assert "16. ANÁLISIS AVANZADO Y EXPLICABILIDAD" in salida
+    assert "¿Por qué se ha detectado?" in salida
+    assert "¿Por qué tiene esta severidad?" in salida
+    assert "Evidencias del diagnóstico" in salida
+
+
+def test_generar_informe_v7_muestra_reauditoria_y_reproducibilidad(capsys) -> None:
+    resultado = {
+        "dataset": _dataset(), "perfil": _perfil(),
+        "tipos_semanticos": _tipos_semanticos(), "calidad": _calidad(),
+        "incidencias": _incidencias(), "resumen": _resumen(),
+    }
+    reauditoria = {
+        "comparacion": {
+            "resueltas": [{}], "persistentes": [], "nuevas": [],
+            "totales": {"resueltas": 1, "persistentes": 0, "nuevas": 0},
+        }
+    }
+    manifiesto = {
+        "format_version": "2.0", "created_at": "2026-10-18T12:00:00+02:00",
+        "dataset": {"file_name": "datos.csv", "sha256": "a" * 64},
+        "environment": {"dataqualitypy": "7.0.0", "python": "3.12.10"},
+    }
+    generar_informe(
+        resultado,
+        resultado_reauditoria=reauditoria,
+        manifiesto_reproducibilidad=manifiesto,
+    )
+    salida = capsys.readouterr().out
+    assert "17. LIMPIEZA Y REAUDITORÍA" in salida
+    assert "Incidencias resueltas: 1" in salida
+    assert "18. REPRODUCIBILIDAD" in salida
+    assert "SHA-256:" in salida
+    assert "DataQualityPy: 7.0.0" in salida
+
+
+def test_generar_informe_v7_no_inventa_bloques_opcionales(capsys) -> None:
+    resultado = {
+        "dataset": _dataset(), "perfil": _perfil(),
+        "tipos_semanticos": _tipos_semanticos(), "calidad": _calidad(),
+        "incidencias": _incidencias(), "resumen": _resumen(),
+    }
+    generar_informe(resultado)
+    salida = capsys.readouterr().out
+    assert "16. ANÁLISIS AVANZADO Y EXPLICABILIDAD" not in salida
+    assert "17. LIMPIEZA Y REAUDITORÍA" not in salida
+    assert "18. REPRODUCIBILIDAD" not in salida

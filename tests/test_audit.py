@@ -593,6 +593,7 @@ def test_auditar_dataset_genera_incidencias_por_reglas_negocio() -> None:
         "columna": "Age",
         "cantidad": 1,
         "porcentaje": pytest.approx(25.0),
+        "regla": "min=0",
         "mensaje": (
             "La columna 'Age' contiene 1 valor que incumple "
             "la regla 'min=0' "
@@ -607,6 +608,7 @@ def test_auditar_dataset_genera_incidencias_por_reglas_negocio() -> None:
         "columna": "Age",
         "cantidad": 1,
         "porcentaje": pytest.approx(25.0),
+        "regla": "max=120",
         "mensaje": (
             "La columna 'Age' contiene 1 valor que incumple "
             "la regla 'max=120' "
@@ -670,3 +672,49 @@ def test_auditar_dataset_integra_resumen_ejecutivo_v3() -> None:
         "controles_no_aplicables": [],
         "controles_no_configurados": [],
     }
+
+def test_auditar_dataset_serializa_explicabilidad_diagnostico_v7() -> None:
+    """Comprueba el contrato público V7 entre incidencia y diagnóstico."""
+    datos = pd.DataFrame(
+        {
+            "Age": ["20", "30", "40", "50", "error", "NA", None],
+        },
+        dtype="object",
+    )
+
+    configuracion = cargar_configuracion()
+    resultado = auditar_dataset(
+        datos,
+        nombre_archivo="diagnostico_v7.csv",
+        configuracion=configuracion,
+    )
+
+    incidencia = next(
+        incidencia
+        for incidencia in resultado["incidencias"]
+        if incidencia["tipo"] == "incompatibilidad_tipo"
+    )
+
+    diagnostico = next(
+        diagnostico
+        for diagnostico in resultado["analisis_avanzado"]["diagnosticos"]
+        if (
+            diagnostico["tipo_incidencia"] == incidencia["tipo"]
+            and diagnostico["columna"] == incidencia["columna"]
+            and diagnostico["mensaje_incidencia"] == incidencia["mensaje"]
+        )
+    )
+
+    assert diagnostico["tipo_incidencia"] == incidencia["tipo"]
+    assert diagnostico["columna"] == incidencia["columna"]
+    assert diagnostico["mensaje_incidencia"] == incidencia["mensaje"]
+    assert isinstance(diagnostico["evidencias"], list)
+    assert diagnostico["evidencias"]
+
+    for evidencia in diagnostico["evidencias"]:
+        assert set(evidencia) == {"clave", "etiqueta", "valor", "fuente"}
+
+    assert isinstance(diagnostico["explicacion"], str)
+    assert diagnostico["explicacion"]
+    assert isinstance(diagnostico["explicacion_severidad"], str)
+    assert diagnostico["explicacion_severidad"]

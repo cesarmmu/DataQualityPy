@@ -376,3 +376,37 @@ def test_generacion_dataset_vacio_devuelve_tupla_vacia_v6() -> None:
     recomendaciones = generar_recomendaciones_limpieza_dataset(())
 
     assert recomendaciones == ()
+
+def test_recomendacion_v7_mantiene_defaults_de_trazabilidad() -> None:
+    recomendacion = CleaningRecommendation(incident_type="prueba", column_name="columna", title="Prueba", explanation="Explicación", action_type=CleaningActionType.REVIEW)
+    assert recomendacion.diagnostic_explanation == ""
+    assert recomendacion.severity_explanation == ""
+
+def test_recomendaciones_v7_propagan_trazabilidad() -> None:
+    diagnostico = Diagnostic(incident_type="incompatibilidad_tipo", category="validez", severity="media", column_name="importe", incident_message="Incidencia", context=(), possible_actions=(), explanation="Explicación diagnóstica V7.", severity_explanation="Explicación de severidad V7.")
+    recomendaciones = generar_recomendaciones_limpieza(diagnostico)
+    assert recomendaciones
+    assert all(r.diagnostic_explanation == diagnostico.explanation for r in recomendaciones)
+    assert all(r.severity_explanation == diagnostico.severity_explanation for r in recomendaciones)
+
+def test_trazabilidad_v7_no_cambia_logica_de_conversion() -> None:
+    diagnostico = Diagnostic(incident_type="incompatibilidad_tipo", category="validez", severity="alta", column_name="importe", incident_message="Incidencia", context=(), possible_actions=(), explanation="Posible discrepancia.", severity_explanation="Severidad alta.")
+    recomendaciones = generar_recomendaciones_limpieza(diagnostico)
+    conversion = next(r for r in recomendaciones if r.family == "conversion")
+    assert conversion.diagnostic_explanation == diagnostico.explanation
+    assert conversion.severity_explanation == diagnostico.severity_explanation
+    assert conversion.action_type is CleaningActionType.CLEAN
+    assert conversion.operation_type is None
+    assert conversion.requires_user_input is True
+    assert conversion.executable is False
+
+def test_trazabilidad_v7_se_propaga_en_generacion_dataset() -> None:
+    primero = Diagnostic(incident_type="clave_inexistente", category="estructura", severity="alta", column_name=None, incident_message="Clave inexistente", context=(), possible_actions=(), explanation="Explicación primera.", severity_explanation="Severidad primera.")
+    segundo = Diagnostic(incident_type="espacios_texto", category="consistencia", severity="baja", column_name="nombre", incident_message="Espacios", context=(), possible_actions=(), explanation="Explicación segunda.", severity_explanation="Severidad segunda.")
+    recomendaciones = generar_recomendaciones_limpieza_dataset((primero, segundo))
+    for diagnostico in (primero, segundo):
+        asociadas = [r for r in recomendaciones if r.incident_type == diagnostico.incident_type]
+        assert asociadas
+        assert all(r.diagnostic_explanation == diagnostico.explanation for r in asociadas)
+        assert all(r.severity_explanation == diagnostico.severity_explanation for r in asociadas)
+

@@ -1,26 +1,56 @@
 # DataQualityPy
 
-**DataQualityPy** es una aplicación desarrollada en Python para auditar, analizar y limpiar datasets de forma controlada.
+**DataQualityPy** es una aplicación desarrollada en Python para **auditar, analizar, explicar, limpiar y volver a verificar la calidad de datasets tabulares** de forma controlada y reproducible.
 
-El proyecto permite detectar problemas habituales de calidad de datos, revisar las incidencias encontradas, preparar un plan de limpieza configurable, simular su impacto, aplicarlo sobre una copia del dataset, volver a auditar el resultado y exportar tanto los datos limpios como la trazabilidad del proceso.
+Trabaja actualmente con archivos **CSV y XLSX** y ofrece una interfaz gráfica desarrollada con **Streamlit**, además de una interfaz de línea de comandos para auditorías.
 
-El dataset original nunca se sobrescribe.
+El proyecto parte de una idea central: detectar una posible incidencia no significa decidir automáticamente cómo corregirla. El usuario conserva el control sobre las decisiones de limpieza y el dataset original nunca se sobrescribe.
 
 ## Flujo de trabajo
 
-DataQualityPy V6 sigue el flujo:
+DataQualityPy V7 sigue el flujo:
 
-**ANALIZAR → DETECTAR → REVISAR → LIMPIAR → VERIFICAR → EXPORTAR**
+**ANALIZAR → DETECTAR → EXPLICAR → REVISAR → SIMULAR → LIMPIAR → REAUDITAR → COMPARAR → EXPORTAR**
 
 1. Se carga un dataset CSV o Excel.
-2. DataQualityPy analiza su estructura y calidad.
-3. Se presentan las incidencias detectadas.
-4. El usuario decide qué operaciones de limpieza desea aplicar.
-5. El plan se simula antes de modificar los datos.
-6. La limpieza se ejecuta sobre una copia.
-7. El resultado se vuelve a auditar.
-8. Se comparan las incidencias antes y después de la limpieza.
-9. Se exportan el dataset limpio y los informes de trazabilidad.
+2. DataQualityPy analiza su estructura, contenido y calidad.
+3. Se realizan análisis avanzados de patrones, compatibilidad semántica y coherencia de tipos.
+4. Las incidencias detectadas se presentan junto con evidencias y explicaciones.
+5. El usuario revisa las recomendaciones y decide qué operaciones incorporar al plan de limpieza.
+6. El plan se simula antes de modificar los datos.
+7. La limpieza se ejecuta sobre una copia del dataset.
+8. El resultado se vuelve a auditar.
+9. Se comparan las incidencias antes y después de la limpieza.
+10. Se pueden generar informes, exportar los datos limpios y conservar información de reproducibilidad.
+
+## Principios de diseño
+
+DataQualityPy separa deliberadamente conceptos que no deben confundirse:
+
+**DIAGNOSTICAR ≠ RECOMENDAR ≠ DECIDIR ≠ EJECUTAR**
+
+**REPRODUCIBLE ≠ AUTOMÁTICO**
+
+**ANÓMALO ≠ INCORRECTO**
+
+**SIMULAR ≠ REAUDITAR**
+
+**LIMPIAR ≠ MEJORAR NECESARIAMENTE**
+
+**COMPARAR ≠ PUNTUAR**
+
+Otros criterios fundamentales son:
+
+- separación entre motor e interfaz;
+- dataset original inmutable;
+- limpieza únicamente bajo decisión explícita del usuario;
+- simulación previa a la ejecución;
+- trazabilidad de las transformaciones;
+- comportamiento conservador ante situaciones ambiguas;
+- reutilización del resultado estructurado de auditoría;
+- reproducibilidad verificable;
+- módulos con responsabilidades diferenciadas;
+- pruebas automatizadas del motor.
 
 ## Características principales
 
@@ -37,10 +67,13 @@ DataQualityPy analiza, entre otros aspectos:
 - posibles valores atípicos mediante IQR;
 - fechas y valores temporales;
 - posibles identificadores;
-- incompatibilidades entre los datos y su tipo semántico;
-- reglas de negocio configurables.
+- reglas de negocio configurables;
+- cardinalidad y unicidad;
+- claves candidatas;
+- distribuciones y frecuencias;
+- relaciones entre columnas.
 
-Los resultados se convierten en incidencias estructuradas que pueden consultarse desde la interfaz.
+Los resultados se transforman en incidencias estructuradas que pueden utilizarse desde la interfaz, los informes y el flujo de diagnóstico.
 
 ### Inferencia semántica
 
@@ -56,23 +89,67 @@ Entre los tipos contemplados se encuentran:
 - identificador;
 - texto libre.
 
-El usuario puede modificar esta interpretación mediante la configuración de la auditoría.
+La configuración de auditoría permite modificar esta interpretación cuando sea necesario.
 
-### Análisis avanzado V6
+### Análisis avanzado V7
 
-V6 amplía el perfilado con cardinalidad y unicidad, claves candidatas, niveles de confianza y evidencias, distribuciones y frecuencias, diagnósticos contextuales, posibles claves compuestas, relaciones funcionales y patrones de presencia.
+V7 amplía el análisis con tres niveles complementarios.
 
-### Diagnósticos y recomendaciones
+#### C1 — Patrones estructurales
 
-V6 separa deliberadamente **DIAGNOSTICAR ≠ RECOMENDAR ≠ DECIDIR ≠ EJECUTAR**. Las recomendaciones se clasifican como **Limpiar**, **Revisar** o **Mantener** y nunca modifican el dataset por sí solas. Las operaciones que necesitan parámetros adicionales requieren información explícita del usuario.
+Permite observar patrones en valores textuales y detectar comportamientos estructurales atípicos.
 
-### Limpieza configurable
+Un patrón anómalo se interpreta como evidencia para revisión, no como prueba automática de error.
 
-DataQualityPy incorpora un motor de limpieza controlada y V6 amplía el flujo con recomendaciones, planes reutilizables y reproducibilidad.
+#### C2 — Compatibilidad semántica
 
-Las operaciones se organizan en varias familias:
+Analiza si los valores observados son compatibles con familias como:
 
-**Texto**
+- numérico;
+- fecha;
+- booleano;
+- correo electrónico;
+- URL;
+- IPv4;
+- UUID.
+
+La compatibilidad puede solaparse entre varias familias y no implica por sí misma que una interpretación sea la correcta.
+
+#### C3 — Coherencia de tipos
+
+Contrasta el tipo físico de la columna con el contenido observado.
+
+Este análisis ayuda a localizar posibles discrepancias sin realizar conversiones automáticas.
+
+### Explicabilidad y diagnósticos
+
+Las incidencias pueden enriquecerse con información que permita comprender:
+
+- qué se ha detectado;
+- por qué se ha detectado;
+- qué evidencias lo sustentan;
+- por qué se ha asignado una determinada severidad;
+- qué posibles acciones pueden revisarse.
+
+La explicabilidad se mantiene separada de la decisión de limpieza.
+
+### Recomendaciones
+
+Las recomendaciones sirven como apoyo a la revisión y pueden clasificarse como:
+
+- **Limpiar**;
+- **Revisar**;
+- **Mantener**.
+
+Una recomendación nunca modifica los datos por sí sola.
+
+Las operaciones que necesitan parámetros adicionales requieren información explícita del usuario.
+
+## Limpieza configurable
+
+Las operaciones de limpieza se organizan en varias familias.
+
+### Texto
 
 - eliminar espacios externos;
 - normalizar espacios internos;
@@ -83,36 +160,34 @@ Las operaciones se organizan en varias familias:
 - eliminar tildes;
 - sustitución controlada de caracteres.
 
-**Sustitución**
+### Sustitución
 
-- reemplazo explícito de valores completos;
-- normalización manual de categorías.
+- reemplazo explícito de valores;
+- conversión controlada de determinados valores a nulo.
 
-**Conversión**
+### Conversión
 
-- conversión a valores numéricos;
-- fechas;
+- numérico;
+- fecha;
 - fecha y hora;
 - texto;
-- booleanos.
+- booleano.
 
-**Valores nulos**
+### Valores nulos
 
-- mantener;
-- eliminar registros;
+- eliminación de registros;
 - sustitución explícita;
 - media;
 - mediana;
-- moda;
-- conversión de determinados marcadores textuales a nulos reales.
+- moda.
 
-**Outliers**
+### Outliers
 
 - detección mediante el criterio IQR;
 - conservación por defecto;
 - eliminación explícita de registros cuando el usuario lo autoriza.
 
-**Duplicados**
+### Duplicados
 
 - detección de filas completas duplicadas;
 - eliminación conservando la primera aparición.
@@ -129,8 +204,8 @@ DataQualityPy permite:
 - eliminar decisiones del plan;
 - estimar su impacto;
 - simular conjuntamente las operaciones;
-- detectar errores antes de aplicar la limpieza;
-- confirmar expresamente la ejecución.
+- detectar errores antes de ejecutar el plan;
+- confirmar expresamente la limpieza.
 
 El orden de ejecución del motor es:
 
@@ -138,29 +213,76 @@ El orden de ejecución del motor es:
 
 ### Planes reutilizables
 
-V6 permite guardar planes de limpieza en JSON y recuperarlos posteriormente. Cargar un plan no lo simula ni lo ejecuta automáticamente; ambas acciones siguen requiriendo decisiones explícitas del usuario.
+Los planes pueden almacenarse y recuperarse posteriormente.
 
-## Verificación
+Cargar o reconstruir un plan no implica ejecutarlo. La simulación y la ejecución siguen siendo acciones explícitas.
 
-Después de ejecutar el plan, DataQualityPy realiza automáticamente una nueva auditoría sobre el dataset limpio.
+## Reauditoría
 
-La aplicación compara ambos estados y clasifica las incidencias como:
+Después de ejecutar un plan de limpieza, DataQualityPy puede auditar de nuevo el dataset resultante.
+
+La comparación entre la auditoría original y la reauditoría clasifica las incidencias como:
 
 - resueltas;
 - pendientes;
 - nuevas.
 
-También muestra los cambios en filas y columnas y las operaciones realmente ejecutadas.
+También permite revisar cambios en las dimensiones del dataset y las operaciones realmente ejecutadas.
+
+La comparación no genera una puntuación automática de mejora: eliminar una incidencia no significa necesariamente que el dataset sea mejor desde el punto de vista del negocio.
 
 ## Reproducibilidad
 
-V6 incorpora manifiestos de ejecución que pueden registrar el dataset, su tamaño y huella SHA-256, la configuración efectiva de auditoría y el plan de limpieza cuando exista. Cargar un manifiesto no ejecuta automáticamente una auditoría ni una limpieza. La verificación del dataset y la recuperación de un plan son acciones explícitas e independientes.
+DataQualityPy V7 utiliza un manifiesto de ejecución para conservar información necesaria para reproducir y verificar el contexto de un análisis.
 
-## Exportación y trazabilidad
+El manifiesto V7 puede registrar:
+
+- referencia del dataset;
+- nombre, extensión y tamaño;
+- huella SHA-256;
+- configuración efectiva de auditoría;
+- plan de limpieza, cuando exista;
+- versión de DataQualityPy;
+- versión de Python;
+- versiones de dependencias relevantes.
+
+La versión actual del formato de manifiesto es **2.0**.
+
+DataQualityPy mantiene compatibilidad de lectura con manifiestos anteriores de V6.
+
+La verificación de un dataset compara su tamaño y SHA-256 con los valores registrados.
+
+Cargar un manifiesto o reconstruir un plan de limpieza **no ejecuta automáticamente** una auditoría ni una limpieza.
+
+## Informes y trazabilidad
+
+V7 consolida la generación de informes a partir del resultado estructurado de auditoría.
+
+Los informes pueden incorporar:
+
+- información del dataset;
+- resumen de auditoría;
+- tipos semánticos;
+- incidencias;
+- perfil y calidad;
+- análisis avanzado;
+- explicabilidad;
+- limpieza y reauditoría, cuando existan;
+- reproducibilidad, cuando exista.
+
+DataQualityPy dispone de salidas:
+
+- JSON;
+- HTML;
+- consola.
+
+Los informes presentan los resultados calculados por el motor y no recalculan la lógica de dominio.
+
+## Exportación de datos limpios
 
 El dataset original no se modifica ni se sobrescribe.
 
-DataQualityPy genera un nuevo archivo utilizando el sufijo:
+Los archivos limpios se generan utilizando el sufijo:
 
 ```text
 _clean
@@ -177,70 +299,71 @@ Para archivos CSV se genera una salida compatible con UTF-8 BOM.
 
 En archivos Excel con varias hojas, únicamente se sustituye el contenido tabular de la hoja auditada. Las demás hojas del libro se conservan.
 
-Además del dataset limpio se generan dos informes:
-
-```text
-nombre_cleaning_report.html
-nombre_cleaning_report.json
-```
-
-Estos informes permiten registrar:
-
-- archivo y hoja de origen;
-- dimensiones originales y finales;
-- configuración utilizada;
-- plan solicitado;
-- operaciones realmente ejecutadas;
-- registros afectados;
-- incidencias antes y después;
-- incidencias resueltas;
-- incidencias pendientes;
-- nuevas incidencias.
-
 ## Formatos soportados
 
 Actualmente DataQualityPy trabaja con:
 
-- CSV
-- XLSX
+- CSV;
+- XLSX.
 
 La carga de CSV contempla distintos separadores y problemas habituales de codificación.
 
 Los libros XLSX pueden contener varias hojas y el usuario selecciona cuál desea auditar.
 
-## Interfaz
+## Interfaz Streamlit
 
-La interfaz principal está desarrollada con **Streamlit**.
+La interfaz gráfica está desarrollada con **Streamlit** y permanece separada del motor de DataQualityPy.
 
 Desde ella se puede:
 
-- cargar el dataset;
-- seleccionar una hoja de Excel;
+- cargar datasets;
+- seleccionar hojas de Excel;
 - configurar la auditoría;
 - ejecutar el análisis;
 - consultar el resumen;
 - revisar incidencias;
-- estudiar perfiles, distribuciones y relaciones entre columnas;
-- revisar diagnósticos y recomendaciones;
+- estudiar columnas y análisis avanzados;
+- consultar diagnósticos y evidencias;
+- revisar recomendaciones;
 - consultar la cobertura de auditoría;
 - generar informes;
-- preparar y reutilizar planes de limpieza;
-- simularlos y revisar su impacto;
-- aplicarlo;
-- verificar el resultado;
-- descargar los archivos generados;
-- crear, cargar y verificar manifiestos de reproducibilidad.
+- preparar planes de limpieza;
+- simular su impacto;
+- ejecutar la limpieza;
+- reauditar el resultado;
+- comparar incidencias;
+- descargar archivos generados;
+- crear, cargar y verificar información de reproducibilidad.
 
-El motor de DataQualityPy permanece independiente de Streamlit.
+V7 modulariza la presentación de resultados en componentes especializados para resumen, incidencias, columnas, cobertura, informes e impresión.
+
+## Dataset de demostración
+
+El repositorio incluye varios archivos pequeños en `data/input/` para probar DataQualityPy sin necesidad de aportar datos externos.
+
+El ejemplo principal es:
+
+```text
+data/input/calidad_prueba.csv
+```
+
+Este dataset contiene intencionadamente distintos problemas de calidad, como valores nulos, filas duplicadas, diferencias de capitalización e inconsistencias de espacios.
+
+También se incluyen:
+
+- `ventas_prueba.csv`, como dataset tabular sencillo;
+- `ventas_prueba.xlsx`, para probar la carga de Excel;
+- `excel_varias_hojas.xlsx`, para probar libros con varias hojas;
+- `config_prueba.json`, como ejemplo de configuración personalizada.
 
 ## Línea de comandos
 
-El proyecto conserva también una interfaz de línea de comandos para ejecutar auditorías sin utilizar Streamlit.
+El proyecto conserva una interfaz de línea de comandos para ejecutar auditorías sin utilizar Streamlit.
 
-Ejemplo:
+Ejemplo principal:
 
 ```powershell
-python main.py data/input/ventas_prueba.csv
+python main.py data/input/calidad_prueba.csv
 ```
 
 Para generar informes adicionales:
@@ -295,17 +418,22 @@ DataQualityPy/
 │   ├── diagnostics.py
 │   ├── distributions.py
 │   ├── html_report.py
+│   ├── html_report_v7.py
 │   ├── incidents.py
 │   ├── inference.py
 │   ├── json_report.py
 │   ├── loader.py
 │   ├── profiler.py
 │   ├── quality.py
+│   ├── reaudit.py
 │   ├── relationships.py
 │   ├── report.py
+│   ├── report_v7.py
 │   ├── reproducibility.py
+│   ├── semantic_compatibility.py
 │   ├── semantic_quality.py
-│   └── summary.py
+│   ├── summary.py
+│   └── type_coherence.py
 │
 ├── tests/
 │   └── test_*.py
@@ -314,7 +442,14 @@ DataQualityPy/
     ├── audit_view.py
     ├── cleaning_view.py
     ├── home.py
-    └── results.py
+    ├── results.py
+    ├── results_columns.py
+    ├── results_common.py
+    ├── results_coverage.py
+    ├── results_incidents.py
+    ├── results_print.py
+    ├── results_reports.py
+    └── results_summary.py
 ```
 
 ## Instalación
@@ -341,66 +476,54 @@ Streamlit abrirá la aplicación en el navegador.
 
 ## Dependencias principales
 
-DataQualityPy V6 utiliza:
+DataQualityPy V7 ha sido validado con:
 
-- Python 3.12
-- Pandas
-- NumPy
-- openpyxl
-- Streamlit
-- pytest
+- Python 3.12.10;
+- Pandas 2.3.3;
+- NumPy 2.5.3;
+- openpyxl 3.1.5;
+- Streamlit 1.65.0;
+- pytest 9.1.1.
 
-Las versiones utilizadas durante el desarrollo están definidas en `requirements.txt`.
+Las versiones utilizadas están definidas en `requirements.txt`.
 
 ## Tests
 
-El proyecto dispone de una batería automatizada de pruebas para el motor de DataQualityPy.
+El proyecto dispone de una batería automatizada de pruebas para el motor y sus principales contratos funcionales.
 
-Estado de validación de V6:
+Estado final de validación de DataQualityPy V7:
 
 ```text
-465 passed
+574 passed
+0 failed
+0 DeprecationWarning
 ```
 
-La versión V6 fue validada funcionalmente con archivos CSV y libros Excel, así como con los flujos de recomendaciones, planes reutilizables, simulación y reproducibilidad.
-
-La suite completa de V6 presenta un único `DeprecationWarning` conocido en una comparación temporal de un test, relacionado con una deprecación futura de NumPy/Pandas y sin impacto funcional en la aplicación.
-
-Para ejecutar la batería completa:
+La regresión completa final se ejecutó promoviendo los `DeprecationWarning` a errores:
 
 ```powershell
-python -m pytest -q
+python -m pytest -W error::DeprecationWarning
 ```
 
-## Principios de diseño
+Resultado:
 
-DataQualityPy se ha desarrollado siguiendo varios criterios:
+```text
+574 passed in 7.78s
+```
 
-- separación entre motor e interfaz;
-- dataset original inmutable;
-- limpieza únicamente bajo decisión explícita del usuario;
-- separación entre diagnóstico, recomendación, decisión y ejecución;
-- simulación previa a la limpieza;
-- reutilización del resultado estructurado de auditoría;
-- trazabilidad de las transformaciones;
-- comportamiento conservador ante decisiones ambiguas;
-- reproducibilidad verificable mediante SHA-256;
-- funciones y módulos con responsabilidades diferenciadas;
-- pruebas automatizadas del motor.
+La interfaz Streamlit se ha validado funcionalmente durante el desarrollo. La automatización específica de pruebas de UI queda como posible mejora futura.
 
 ## Limitaciones actuales
 
-DataQualityPy V6 está orientado principalmente a datasets tabulares CSV y XLSX.
+DataQualityPy V7 está orientado principalmente a datasets tabulares CSV y XLSX.
 
 En libros Excel complejos, la aplicación conserva las hojas no auditadas, pero no garantiza la conservación perfecta de elementos avanzados vinculados al rango modificado, como determinados gráficos, tablas de Excel, validaciones o estructuras complejas.
 
-La interfaz de línea de comandos está orientada actualmente a la auditoría; el flujo completo de limpieza y exportación se realiza desde la interfaz Streamlit.
+La interfaz de línea de comandos está orientada principalmente a la auditoría; el flujo interactivo completo de revisión, limpieza y reauditoría se realiza desde Streamlit.
 
-DataQualityPy no intenta decidir automáticamente cómo deben corregirse problemas ambiguos de calidad. La decisión final de limpieza corresponde al usuario.
+DataQualityPy no intenta decidir automáticamente cómo deben corregirse problemas ambiguos de calidad. La decisión final corresponde al usuario.
 
-Los análisis de relaciones entre columnas son heurísticos y deben interpretarse como apoyo al diagnóstico, no como reglas de negocio inferidas automáticamente.
-
-La modularización adicional de algunas vistas de Streamlit queda como posible mejora estructural futura.
+Los análisis de patrones, compatibilidad, coherencia y relaciones entre columnas son mecanismos de apoyo al diagnóstico y no deben interpretarse automáticamente como reglas de negocio.
 
 ## Evolución
 
@@ -412,19 +535,19 @@ DataQualityPy se ha desarrollado de forma incremental:
 - **V4** — interfaz gráfica mediante Streamlit.
 - **V5** — auditoría configurable, limpieza controlada, reauditoría, exportación y trazabilidad.
 - **V6** — perfilado avanzado, claves candidatas y relaciones, diagnósticos y recomendaciones, planes reutilizables, simulación enriquecida, UX integrada y reproducibilidad mediante manifiestos y SHA-256.
-
-La documentación histórica de algunas fases del desarrollo se conserva en `docs/historico`.
+- **V7** — análisis estructural y semántico avanzado, coherencia de tipos, explicabilidad ampliada, reauditoría formal, informes V7, reproducibilidad del entorno, compatibilidad de manifiestos y modularización de la interfaz de resultados.
 
 ## Estado del proyecto
 
-**DataQualityPy V6 — versión estable candidata a release**
+**DataQualityPy V7.0.0 — versión estable**
 
-Validación automatizada:
+Validación automatizada final:
 
 ```text
-465 tests superados
+574 tests superados
+0 DeprecationWarning
 ```
 
-Flujo funcional validado:
+Flujo funcional:
 
-**ANALIZAR → DETECTAR → REVISAR → LIMPIAR → VERIFICAR → EXPORTAR**
+**ANALIZAR → DETECTAR → EXPLICAR → REVISAR → SIMULAR → LIMPIAR → REAUDITAR → COMPARAR → EXPORTAR**

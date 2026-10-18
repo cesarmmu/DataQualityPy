@@ -41,6 +41,8 @@ class CleaningRecommendation:
     operation_type: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     requires_user_input: bool = False
+    diagnostic_explanation: str = ""
+    severity_explanation: str = ""
 
     @property
     def executable(self) -> bool:
@@ -73,6 +75,8 @@ def _recomendacion(
         operation_type=operation_type,
         parameters={} if parameters is None else dict(parameters),
         requires_user_input=requires_user_input,
+        diagnostic_explanation=diagnostico.explanation,
+        severity_explanation=diagnostico.severity_explanation,
     )
 
 

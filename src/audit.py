@@ -246,7 +246,7 @@ def _serializar_distribuciones(
 def _serializar_diagnostico(
     diagnostico: Diagnostic,
 ) -> dict[str, Any]:
-    """Serializa un diagnóstico contextual."""
+    """Serializa un diagnóstico contextual y su explicabilidad V7."""
     return {
         "tipo_incidencia": diagnostico.incident_type,
         "categoria": diagnostico.category,
@@ -257,6 +257,17 @@ def _serializar_diagnostico(
         "acciones_posibles": list(
             diagnostico.possible_actions
         ),
+        "evidencias": [
+            {
+                "clave": evidencia.key,
+                "etiqueta": evidencia.label,
+                "valor": evidencia.value,
+                "fuente": evidencia.source,
+            }
+            for evidencia in diagnostico.evidence
+        ],
+        "explicacion": diagnostico.explanation,
+        "explicacion_severidad": diagnostico.severity_explanation,
     }
 
 

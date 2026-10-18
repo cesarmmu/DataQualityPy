@@ -441,6 +441,7 @@ def generar_incidencias(
                         )
                     ),
                     "columna": columna,
+                    "regla": descripcion_regla,
                     "cantidad": cantidad,
                     "porcentaje": porcentaje,
                     "mensaje": (

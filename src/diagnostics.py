@@ -13,6 +13,21 @@ from src.inference import (
     SemanticInference,
     SemanticType,
 )
+from src.semantic_compatibility import (
+    SemanticCompatibilityType,
+    analizar_compatibilidad_semantica,
+)
+from src.type_coherence import analizar_coherencia_tipo
+
+
+@dataclass(frozen=True)
+class DiagnosticEvidence:
+    """Evidencia objetiva utilizada para explicar un diagnóstico."""
+
+    key: str
+    label: str
+    value: object
+    source: str
 
 
 @dataclass(frozen=True)
@@ -26,6 +41,370 @@ class Diagnostic:
     incident_message: str
     context: tuple[str, ...]
     possible_actions: tuple[str, ...]
+    evidence: tuple[DiagnosticEvidence, ...] = ()
+    explanation: str = ""
+    severity_explanation: str = ""
+
+
+
+def _evidencia(key: str, label: str, value: object, source: str) -> DiagnosticEvidence:
+    """Construye una evidencia diagnóstica estructurada."""
+    return DiagnosticEvidence(key=key, label=label, value=value, source=source)
+
+
+def _evidencias_basicas(
+    tipo: str,
+    incidencia: Mapping[str, Any],
+    analisis: ColumnAnalysis | None,
+    inferencia: SemanticInference | None,
+    clave: CandidateKeyAnalysis | None,
+) -> tuple[DiagnosticEvidence, ...]:
+    """Extrae evidencias objetivas relevantes para la incidencia."""
+    evidencias: list[DiagnosticEvidence] = []
+
+    if analisis is not None and tipo in {
+        "nulos_reales", "nulos_textuales", "columna_vacia", "columna_constante",
+        "inconsistencia_categorica", "outliers", "incompatibilidad_tipo", "conversion_fecha",
+    }:
+        evidencias.extend((
+            _evidencia("analyzable_count", "Valores analizables", analisis.analyzable_count, "column_analysis"),
+            _evidencia("analyzable_ratio", "Cobertura de valores analizables", analisis.analyzable_ratio, "column_analysis"),
+        ))
+
+    if analisis is not None and tipo == "nulos_reales":
+        evidencias.append(_evidencia("null_count", "Valores nulos", analisis.null_count, "column_analysis"))
+
+    if analisis is not None and tipo == "columna_constante":
+        evidencias.extend((
+            _evidencia("unique_count", "Valores distintos", analisis.unique_count, "column_analysis"),
+            _evidencia("most_frequent_value", "Valor más frecuente", analisis.most_frequent_value, "column_analysis"),
+            _evidencia("most_frequent_ratio", "Frecuencia del valor más frecuente", analisis.most_frequent_ratio, "column_analysis"),
+        ))
+
+    if analisis is not None and tipo == "inconsistencia_categorica":
+        evidencias.append(_evidencia("unique_count", "Valores distintos", analisis.unique_count, "column_analysis"))
+
+    if analisis is not None and tipo == "conversion_fecha" and analisis.datetime_conversion is not None:
+        conversion = analisis.datetime_conversion
+        evidencias.extend((
+            _evidencia("datetime_attempted_count", "Valores evaluados como fecha", conversion.attempted_count, "column_analysis"),
+            _evidencia("datetime_convertible_count", "Valores convertibles a fecha", conversion.convertible_count, "column_analysis"),
+            _evidencia("datetime_failed_count", "Valores no convertibles a fecha", conversion.failed_count, "column_analysis"),
+            _evidencia("datetime_success_ratio", "Compatibilidad temporal", conversion.success_ratio, "column_analysis"),
+        ))
+
+    if inferencia is not None and tipo in {"espacios_texto", "inconsistencia_categorica", "incompatibilidad_tipo", "conversion_fecha"}:
+        evidencias.extend((
+            _evidencia("semantic_type", "Tipo semántico", inferencia.semantic_type.value, "semantic_inference"),
+            _evidencia("semantic_confidence", "Confianza de inferencia", inferencia.confidence.value, "semantic_inference"),
+        ))
+
+    if clave is not None and tipo in {"nulos_reales", "nulos_textuales"}:
+        evidencias.append(_evidencia("candidate_key_level", "Nivel de clave candidata", clave.level.value, "candidate_key"))
+
+    if tipo in {"filas_duplicadas", "duplicados_clave", "clave_inexistente", "incumplimiento_regla"}:
+        for key in ("cantidad", "filas", "columnas", "clave", "regla", "valor", "porcentaje"):
+            if key in incidencia:
+                evidencias.append(_evidencia(f"incident_{key}", key.replace("_", " ").capitalize(), incidencia[key], "incident"))
+
+    return tuple(evidencias)
+
+
+
+def _evidencias_avanzadas(
+    tipo: str,
+    analisis: ColumnAnalysis | None,
+    inferencia: SemanticInference | None,
+) -> tuple[DiagnosticEvidence, ...]:
+    """Aporta evidencias C1/C2/C3 solo cuando son relevantes."""
+    if analisis is None:
+        return ()
+
+    evidencias: list[DiagnosticEvidence] = []
+    patrones = analisis.structural_patterns
+
+    if patrones is not None and tipo in {
+        "columna_constante",
+        "espacios_texto",
+        "inconsistencia_categorica",
+        "incompatibilidad_tipo",
+        "conversion_fecha",
+    }:
+        evidencias.extend((
+            _evidencia(
+                "dominant_structural_pattern",
+                "Patrón estructural dominante",
+                patrones.dominant_pattern,
+                "structural_patterns",
+            ),
+            _evidencia(
+                "dominant_structural_pattern_ratio",
+                "Frecuencia del patrón dominante",
+                patrones.dominant_ratio,
+                "structural_patterns",
+            ),
+            _evidencia(
+                "distinct_structural_pattern_count",
+                "Patrones estructurales distintos",
+                patrones.distinct_pattern_count,
+                "structural_patterns",
+            ),
+        ))
+
+    if inferencia is None:
+        return tuple(evidencias)
+
+    mapa_semantico = {
+        SemanticType.NUMERIC: SemanticCompatibilityType.NUMERIC,
+        SemanticType.DATE: SemanticCompatibilityType.DATE,
+        SemanticType.DATETIME: SemanticCompatibilityType.DATE,
+        SemanticType.BOOLEAN: SemanticCompatibilityType.BOOLEAN,
+    }
+
+    if tipo in {"nulos_textuales", "incompatibilidad_tipo", "conversion_fecha"}:
+        compatibilidad = analizar_compatibilidad_semantica(analisis)
+        tipo_relevante = (
+            SemanticCompatibilityType.DATE
+            if tipo == "conversion_fecha"
+            else mapa_semantico.get(inferencia.semantic_type)
+        )
+
+        if tipo_relevante is not None:
+            for evidencia in compatibilidad.compatibilities:
+                if evidencia.compatibility_type is tipo_relevante:
+                    nombre = evidencia.compatibility_type.value
+                    evidencias.extend((
+                        _evidencia(
+                            f"{nombre}_compatibility_count",
+                            f"Valores compatibles con {nombre}",
+                            evidencia.compatible_count,
+                            "semantic_compatibility",
+                        ),
+                        _evidencia(
+                            f"{nombre}_compatibility",
+                            f"Compatibilidad con {nombre}",
+                            evidencia.compatible_ratio,
+                            "semantic_compatibility",
+                        ),
+                    ))
+                    break
+
+    if tipo in {"incompatibilidad_tipo", "conversion_fecha"}:
+        coherencia = analizar_coherencia_tipo(analisis, inferencia)
+        evidencias.extend((
+            _evidencia("physical_type", "Tipo físico", coherencia.physical_type, "type_coherence"),
+            _evidencia(
+                "observed_type",
+                "Tipo observado",
+                coherencia.observed_type.value if coherencia.observed_type is not None else None,
+                "type_coherence",
+            ),
+            _evidencia(
+                "type_coherence_status",
+                "Coherencia entre tipo y contenido",
+                coherencia.status.value,
+                "type_coherence",
+            ),
+            _evidencia(
+                "type_coherence_evidence_ratio",
+                "Evidencia de coherencia",
+                coherencia.evidence_ratio,
+                "type_coherence",
+            ),
+        ))
+
+    return tuple(evidencias)
+
+
+def _explicacion_avanzada(
+    tipo: str,
+    analisis: ColumnAnalysis | None,
+    inferencia: SemanticInference | None,
+) -> str:
+    """Interpreta C1/C2/C3 sin convertir la evidencia en una decisión."""
+    if analisis is None:
+        return ""
+
+    if tipo == "inconsistencia_categorica":
+        patrones = analisis.structural_patterns
+        if patrones is None:
+            return ""
+        return (
+            " El análisis estructural observa "
+            f"{patrones.distinct_pattern_count} patrones distintos y un patrón "
+            f"dominante '{patrones.dominant_pattern}' con una frecuencia de "
+            f"{_formatear_porcentaje(patrones.dominant_ratio)}. "
+            "Las diferencias de patrón pueden ayudar a localizar variantes de "
+            "formato, pero no demuestran que los valores sean equivalentes."
+        )
+
+    if tipo not in {"incompatibilidad_tipo", "conversion_fecha"} or inferencia is None:
+        return ""
+
+    coherencia = analizar_coherencia_tipo(analisis, inferencia)
+    compatibilidad = analizar_compatibilidad_semantica(analisis)
+    mapa_semantico = {
+        SemanticType.NUMERIC: SemanticCompatibilityType.NUMERIC,
+        SemanticType.DATE: SemanticCompatibilityType.DATE,
+        SemanticType.DATETIME: SemanticCompatibilityType.DATE,
+        SemanticType.BOOLEAN: SemanticCompatibilityType.BOOLEAN,
+    }
+    tipo_relevante = (
+        SemanticCompatibilityType.DATE
+        if tipo == "conversion_fecha"
+        else mapa_semantico.get(inferencia.semantic_type)
+    )
+
+    ratio = None
+    if tipo_relevante is not None:
+        for evidencia in compatibilidad.compatibilities:
+            if evidencia.compatibility_type is tipo_relevante:
+                ratio = evidencia.compatible_ratio
+                break
+
+    partes: list[str] = []
+    if ratio is not None:
+        partes.append(
+            " La compatibilidad observada con "
+            f"'{tipo_relevante.value}' es {_formatear_porcentaje(ratio)}."
+        )
+
+    if coherencia.status.value == "potential_mismatch":
+        partes.append(
+            " El tipo físico y el contenido observado presentan una posible "
+            "discrepancia. Esto no implica por sí solo que el tipo almacenado "
+            "sea incorrecto ni que deba convertirse."
+        )
+    elif coherencia.status.value == "coherent":
+        partes.append(
+            " El tipo físico y el contenido observado resultan coherentes "
+            "según los criterios de C3."
+        )
+    else:
+        partes.append(
+            " La evidencia disponible no permite establecer una discrepancia "
+            "concluyente entre el tipo físico y el contenido observado."
+        )
+
+    return "".join(partes)
+
+def _explicacion_basica(
+    tipo: str,
+    analisis: ColumnAnalysis | None,
+    inferencia: SemanticInference | None,
+    clave: CandidateKeyAnalysis | None,
+) -> str:
+    """Construye una explicación prudente sin recomendar transformaciones."""
+    if tipo == "nulos_reales":
+        if analisis is None:
+            return "La incidencia indica la presencia de valores ausentes. Su impacto debe interpretarse según el significado de la columna."
+        explicacion = (
+            f"La columna contiene {analisis.null_count} valores nulos y mantiene una cobertura de valores analizables de "
+            f"{_formatear_porcentaje(analisis.analyzable_ratio)}."
+        )
+        if clave is not None and clave.level is CandidateKeyLevel.POSSIBLE and analisis.null_count > 0:
+            explicacion += " La presencia de valores ausentes impide que la columna cumpla actualmente las condiciones de una clave candidata fuerte."
+        return explicacion
+
+    if tipo == "nulos_textuales":
+        return "Se han detectado representaciones textuales que pueden expresar ausencia de información. Su significado debe confirmarse antes de considerarlas equivalentes a valores nulos reales."
+    if tipo == "filas_duplicadas":
+        return "Se han detectado filas con los mismos valores en todas las columnas evaluadas. La repetición no determina por sí sola que los registros sean incorrectos o prescindibles."
+    if tipo == "duplicados_clave":
+        return "La clave configurada no identifica de forma única todos los registros evaluados. Esto puede reflejar duplicados reales o una clave que no representa la granularidad del dataset."
+    if tipo == "clave_inexistente":
+        return "La clave configurada no puede evaluarse porque alguna de sus columnas no está disponible en la estructura actual del dataset."
+    if tipo == "columna_vacia":
+        return "La columna no contiene valores analizables en el dataset evaluado. Esta observación no determina por sí sola si la columna debe conservarse o excluirse."
+    if tipo == "columna_constante":
+        return "La columna presenta un único valor distinto entre sus valores analizables. La falta de variación limita su información discriminante, pero no determina que la columna sea innecesaria."
+    if tipo == "espacios_texto":
+        return "Se han detectado espacios externos en valores de texto. Pueden hacer que contenidos visualmente iguales sean tratados como distintos, aunque los espacios también pueden ser significativos."
+    if tipo == "inconsistencia_categorica":
+        return "Se han detectado variantes textuales que pueden representar diferencias de formato entre categorías. La similitud entre valores no demuestra que sean conceptualmente equivalentes."
+    if tipo == "outliers":
+        return "Se han detectado valores estadísticamente atípicos mediante el criterio IQR. Esta condición señala observaciones extremas, pero no determina que sean incorrectas."
+    if tipo == "incompatibilidad_tipo":
+        if inferencia is None:
+            return "Se han detectado valores incompatibles con la interpretación esperada de la columna. La evidencia disponible no justifica por sí sola una conversión automática."
+        return f"Se han detectado valores que no son compatibles con el tipo semántico inferido '{inferencia.semantic_type.value}'. La incompatibilidad debe interpretarse como evidencia para revisión, no como prueba automática de error."
+    if tipo == "incumplimiento_regla":
+        return "La incidencia representa una discrepancia respecto a una regla de negocio configurada explícitamente. El incumplimiento no demuestra por sí solo que el dato sea incorrecto."
+    if tipo == "conversion_fecha":
+        if analisis is not None and analisis.datetime_conversion is not None:
+            fallidos = analisis.datetime_conversion.failed_count
+            return f"La conversión temporal no puede interpretar {fallidos} valores con los criterios aplicados. Esto puede deberse a formatos diferentes, valores no temporales o información ambigua."
+        return "Parte de los valores no puede interpretarse mediante los criterios de conversión temporal aplicados. Esto no implica necesariamente que los valores sean incorrectos."
+    return "La incidencia dispone de información limitada para una explicación específica. Debe interpretarse junto con su mensaje y contexto."
+
+
+def _explicacion_severidad(
+    tipo: str,
+    severidad: str,
+    incidencia: Mapping[str, Any],
+) -> str:
+    """Explica el criterio de severidad ya aplicado por el motor."""
+    tipos_por_porcentaje = {
+        "nulos_reales",
+        "nulos_textuales",
+        "filas_duplicadas",
+        "duplicados_clave",
+        "espacios_texto",
+        "incompatibilidad_tipo",
+        "incumplimiento_regla",
+        "conversion_fecha",
+    }
+
+    if tipo in tipos_por_porcentaje:
+        porcentaje = incidencia.get("porcentaje")
+        if isinstance(porcentaje, (int, float)) and not isinstance(porcentaje, bool):
+            porcentaje_formateado = _formatear_porcentaje(float(porcentaje))
+            if severidad == "baja":
+                criterio = "inferior al 5 %"
+            elif severidad == "media":
+                criterio = "igual o superior al 5 % e inferior al 20 %"
+            elif severidad == "alta":
+                criterio = "igual o superior al 20 %"
+            else:
+                return (
+                    f"La incidencia afecta al {porcentaje_formateado} de los valores "
+                    "evaluados, pero su severidad no corresponde a uno de los niveles "
+                    "estándar del motor."
+                )
+            return (
+                f"La incidencia afecta al {porcentaje_formateado} de los valores "
+                f"evaluados. Según los umbrales actuales del motor, un porcentaje "
+                f"{criterio} se clasifica como severidad {severidad}."
+            )
+
+        return (
+            "La incidencia utiliza una severidad basada en porcentaje, pero no se "
+            "dispone del porcentaje necesario para explicar el nivel asignado."
+        )
+
+    severidades_fijas = {
+        "clave_inexistente": "alta",
+        "columna_vacia": "alta",
+        "columna_constante": "baja",
+        "inconsistencia_categorica": "media",
+        "outliers": "baja",
+    }
+    severidad_fija = severidades_fijas.get(tipo)
+    if severidad_fija is not None:
+        if severidad == severidad_fija:
+            return (
+                f"El motor asigna a este tipo de incidencia una severidad "
+                f"{severidad_fija} fija. Esta explicación describe la regla "
+                "existente y no recalcula la severidad."
+            )
+        return (
+            f"El motor define para este tipo de incidencia una severidad fija "
+            f"{severidad_fija}, mientras que la incidencia recibida indica "
+            f"'{severidad}'. El diagnóstico conserva el valor recibido y no lo "
+            "recalcula."
+        )
+
+    return ""
 
 
 def _formatear_porcentaje(valor: float) -> str:
@@ -741,6 +1120,34 @@ def generar_diagnostico(
         )
     )
 
+    evidencias = (
+        _evidencias_basicas(
+            tipo,
+            incidencia,
+            analisis,
+            inferencia,
+            clave_candidata,
+        )
+        + _evidencias_avanzadas(
+            tipo,
+            analisis,
+            inferencia,
+        )
+    )
+    explicacion = (
+        _explicacion_basica(
+            tipo,
+            analisis,
+            inferencia,
+            clave_candidata,
+        )
+        + _explicacion_avanzada(
+            tipo,
+            analisis,
+            inferencia,
+        )
+    )
+
     return Diagnostic(
         incident_type=tipo,
         category=categoria,
@@ -749,6 +1156,13 @@ def generar_diagnostico(
         incident_message=mensaje,
         context=contexto,
         possible_actions=acciones,
+        evidence=evidencias,
+        explanation=explicacion,
+        severity_explanation=_explicacion_severidad(
+            tipo,
+            severidad,
+            incidencia,
+        ),
     )
 
 

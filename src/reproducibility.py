@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
+from importlib import metadata
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 
+from src import __version__
 from src.cleaning_plan import CleaningPlan
 from src.cleaning_plan_storage import (
     StoredCleaningPlan,
@@ -41,7 +44,11 @@ from src.cleaning_plan_storage import (
 from src.config import ErrorConfiguracion, cargar_configuracion
 
 
-MANIFEST_FORMAT_VERSION = "1.0"
+LEGACY_MANIFEST_FORMAT_VERSION = "1.0"
+MANIFEST_FORMAT_VERSION = "2.0"
+SUPPORTED_MANIFEST_FORMAT_VERSIONS = {LEGACY_MANIFEST_FORMAT_VERSION, MANIFEST_FORMAT_VERSION}
+DATAQUALITYPY_VERSION = __version__
+RELEVANT_PACKAGES = ("pandas", "numpy", "openpyxl", "streamlit")
 HASH_ALGORITHM = "sha256"
 HASH_BLOCK_SIZE = 1024 * 1024
 
@@ -55,6 +62,68 @@ class DatasetVerificationStatus(Enum):
 
     MATCH = "coincide"
     MISMATCH = "no_coincide"
+
+
+class VerificationStatus(Enum):
+    """Estado común de una comparación reproducible V7."""
+
+    MATCH = "coincide"
+    MISMATCH = "diferente"
+    UNAVAILABLE = "no_disponible"
+
+
+@dataclass(frozen=True)
+class RuntimeEnvironment:
+    """Versiones mínimas necesarias para interpretar una ejecución."""
+
+    dataqualitypy: str
+    python: str
+    packages: Mapping[str, str]
+
+    def a_dict(self) -> dict[str, Any]:
+        return {
+            "dataqualitypy": self.dataqualitypy,
+            "python": self.python,
+            "packages": dict(self.packages),
+        }
+
+
+@dataclass(frozen=True)
+class ComponentVerification:
+    """Comparación de un componente del contexto reproducible."""
+
+    status: VerificationStatus
+    expected: Any = None
+    actual: Any = None
+    detail: str = ""
+
+    @property
+    def matches(self) -> bool:
+        return self.status is VerificationStatus.MATCH
+
+
+@dataclass(frozen=True)
+class ReproducibilityVerification:
+    """Resultado global, explicable y no ejecutivo de reproducibilidad."""
+
+    dataset: ComponentVerification
+    audit_configuration: ComponentVerification
+    cleaning_plan: ComponentVerification
+    environment: ComponentVerification
+
+    @property
+    def matches(self) -> bool:
+        componentes = (
+            self.dataset,
+            self.audit_configuration,
+            self.cleaning_plan,
+            self.environment,
+        )
+        disponibles = [
+            item for item in componentes
+            if item.status is not VerificationStatus.UNAVAILABLE
+        ]
+        return bool(disponibles) and all(item.matches for item in disponibles)
 
 
 @dataclass(frozen=True)
@@ -85,10 +154,11 @@ class ExecutionManifest:
     dataset: DatasetReference
     audit_configuration: Mapping[str, Any]
     cleaning_plan: StoredCleaningPlan | None = None
+    environment: RuntimeEnvironment | None = None
 
     def a_dict(self) -> dict[str, Any]:
         """Devuelve el manifiesto como estructura serializable."""
-        return {
+        datos = {
             "format_version": self.format_version,
             "created_at": self.created_at,
             "dataset": self.dataset.a_dict(),
@@ -101,6 +171,13 @@ class ExecutionManifest:
                 else None
             ),
         }
+        if self.format_version != LEGACY_MANIFEST_FORMAT_VERSION:
+            datos["environment"] = (
+                self.environment.a_dict()
+                if self.environment is not None
+                else None
+            )
+        return datos
 
 
 @dataclass(frozen=True)
@@ -404,6 +481,49 @@ def _crear_plan_reproducible(
         ) from exc
 
 
+def obtener_entorno_actual() -> RuntimeEnvironment:
+    """Obtiene únicamente las versiones relevantes para reproducibilidad."""
+    paquetes: dict[str, str] = {}
+    for paquete in RELEVANT_PACKAGES:
+        try:
+            paquetes[paquete] = metadata.version(paquete)
+        except metadata.PackageNotFoundError:
+            paquetes[paquete] = "no_disponible"
+
+    return RuntimeEnvironment(
+        dataqualitypy=__version__,
+        python=sys.version.split()[0],
+        packages=paquetes,
+    )
+
+
+def _entorno_desde_dict(datos: Any) -> RuntimeEnvironment:
+    """Reconstruye y valida el entorno mínimo persistido en V7."""
+    if not isinstance(datos, dict):
+        raise ReproducibilityError("'environment' debe ser un objeto JSON.")
+    esperados = {"dataqualitypy", "python", "packages"}
+    if set(datos) != esperados:
+        raise ReproducibilityError(
+            "El entorno no tiene la estructura esperada."
+        )
+    if not isinstance(datos["dataqualitypy"], str) or not datos["dataqualitypy"]:
+        raise ReproducibilityError("La versión de DataQualityPy no es válida.")
+    if not isinstance(datos["python"], str) or not datos["python"]:
+        raise ReproducibilityError("La versión de Python no es válida.")
+    if not isinstance(datos["packages"], dict):
+        raise ReproducibilityError("'packages' debe ser un objeto JSON.")
+    paquetes: dict[str, str] = {}
+    for nombre, version in datos["packages"].items():
+        if not isinstance(nombre, str) or not isinstance(version, str):
+            raise ReproducibilityError("Las versiones de paquetes no son válidas.")
+        paquetes[nombre] = version
+    return RuntimeEnvironment(
+        dataqualitypy=datos["dataqualitypy"],
+        python=datos["python"],
+        packages=paquetes,
+    )
+
+
 def crear_manifiesto(
     dataset_path: str | Path,
     *,
@@ -434,73 +554,53 @@ def crear_manifiesto(
         dataset=dataset,
         audit_configuration=configuracion,
         cleaning_plan=plan_almacenado,
+        environment=obtener_entorno_actual(),
     )
 
 
 def manifiesto_desde_dict(
     datos: Any,
 ) -> ExecutionManifest:
-    """Reconstruye y valida un manifiesto desde datos externos."""
+    """Reconstruye manifiestos V6 (1.0) y V7 (2.0)."""
     if not isinstance(datos, dict):
+        raise ReproducibilityError("El manifiesto debe ser un objeto JSON.")
+
+    version = datos.get("format_version")
+    if version not in SUPPORTED_MANIFEST_FORMAT_VERSIONS:
         raise ReproducibilityError(
-            "El manifiesto debe ser un objeto JSON."
+            "Versión de manifiesto no compatible: "
+            f"'{version}'. Versiones admitidas: "
+            f"{', '.join(sorted(SUPPORTED_MANIFEST_FORMAT_VERSIONS))}."
         )
 
     campos_esperados = {
-        "format_version",
-        "created_at",
-        "dataset",
-        "audit_configuration",
-        "cleaning_plan",
+        "format_version", "created_at", "dataset",
+        "audit_configuration", "cleaning_plan",
     }
+    if version == MANIFEST_FORMAT_VERSION:
+        campos_esperados.add("environment")
 
     campos_recibidos = set(datos)
-
     if campos_recibidos != campos_esperados:
         faltantes = campos_esperados - campos_recibidos
         extras = campos_recibidos - campos_esperados
-
         detalles: list[str] = []
-
         if faltantes:
-            detalles.append(
-                "faltan: " + ", ".join(sorted(faltantes))
-            )
-
+            detalles.append("faltan: " + ", ".join(sorted(faltantes)))
         if extras:
-            detalles.append(
-                "sobran: " + ", ".join(sorted(extras))
-            )
-
+            detalles.append("sobran: " + ", ".join(sorted(extras)))
         raise ReproducibilityError(
             "El manifiesto no tiene la estructura esperada "
             f"({'; '.join(detalles)})."
         )
 
-    version = datos["format_version"]
-
-    if version != MANIFEST_FORMAT_VERSION:
-        raise ReproducibilityError(
-            "Versión de manifiesto no compatible: "
-            f"'{version}'. Se esperaba "
-            f"'{MANIFEST_FORMAT_VERSION}'."
-        )
-
-    fecha = _validar_fecha_iso(
-        datos["created_at"]
-    )
-
-    dataset = _dataset_reference_desde_dict(
-        datos["dataset"]
-    )
-
+    fecha = _validar_fecha_iso(datos["created_at"])
+    dataset = _dataset_reference_desde_dict(datos["dataset"])
     configuracion_datos = datos["audit_configuration"]
-
     if not isinstance(configuracion_datos, dict):
         raise ReproducibilityError(
             "'audit_configuration' debe ser un objeto JSON."
         )
-
     try:
         configuracion = cargar_configuracion(
             configuracion_usuario=configuracion_datos
@@ -512,30 +612,31 @@ def manifiesto_desde_dict(
         ) from exc
 
     plan_datos = datos["cleaning_plan"]
-
     if plan_datos is None:
         plan = None
     else:
         try:
-            plan = plan_almacenado_desde_dict(
-                plan_datos
-            )
+            plan = plan_almacenado_desde_dict(plan_datos)
         except ValueError as exc:
             raise ReproducibilityError(
-                "El plan de limpieza almacenado en el "
-                f"manifiesto no es válido: {exc}"
+                "El plan de limpieza almacenado en el manifiesto "
+                f"no es válido: {exc}"
             ) from exc
 
-    return ExecutionManifest(
-        format_version=MANIFEST_FORMAT_VERSION,
-        created_at=fecha,
-        dataset=dataset,
-        audit_configuration=_copiar_configuracion(
-            configuracion
-        ),
-        cleaning_plan=plan,
+    entorno = (
+        None
+        if version == LEGACY_MANIFEST_FORMAT_VERSION
+        else _entorno_desde_dict(datos["environment"])
     )
 
+    return ExecutionManifest(
+        format_version=version,
+        created_at=fecha,
+        dataset=dataset,
+        audit_configuration=_copiar_configuracion(configuracion),
+        cleaning_plan=plan,
+        environment=entorno,
+    )
 
 def guardar_manifiesto(
     ruta: str | Path,
@@ -695,3 +796,133 @@ def verificar_dataset(
         expected_sha256=referencia.sha256,
         actual_sha256=sha256_actual,
     )
+
+_NOT_PROVIDED = object()
+
+
+def _comparar_valores(esperado: Any, actual: Any, detalle: str) -> ComponentVerification:
+    estado = VerificationStatus.MATCH if esperado == actual else VerificationStatus.MISMATCH
+    return ComponentVerification(estado, esperado, actual, detalle)
+
+
+def verificar_reproducibilidad(
+    manifiesto: ExecutionManifest,
+    *,
+    dataset_path: str | Path | None = None,
+    audit_configuration: dict[str, Any] | object = _NOT_PROVIDED,
+    cleaning_plan: CleaningPlan | None | object = _NOT_PROVIDED,
+    environment: RuntimeEnvironment | None = None,
+) -> ReproducibilityVerification:
+    """Compara un manifiesto con el contexto actual sin ejecutar acciones.
+
+    Un componente no suministrado, o no presente en un manifiesto legado,
+    se marca como ``no_disponible`` en lugar de inferirse.
+    """
+    if not isinstance(manifiesto, ExecutionManifest):
+        raise ReproducibilityError(
+            "'manifiesto' debe ser una instancia de ExecutionManifest."
+        )
+
+    if dataset_path is None:
+        dataset = ComponentVerification(
+            VerificationStatus.UNAVAILABLE,
+            expected=manifiesto.dataset.a_dict(),
+            detail="No se ha proporcionado un dataset actual.",
+        )
+    else:
+        verificacion = verificar_dataset(dataset_path, manifiesto)
+        dataset = ComponentVerification(
+            VerificationStatus.MATCH
+            if verificacion.matches
+            else VerificationStatus.MISMATCH,
+            expected={
+                "file_size": verificacion.expected_size,
+                "sha256": verificacion.expected_sha256,
+            },
+            actual={
+                "file_size": verificacion.actual_size,
+                "sha256": verificacion.actual_sha256,
+            },
+            detail="Comparación por tamaño y SHA-256 del contenido.",
+        )
+
+    if audit_configuration is _NOT_PROVIDED:
+        configuracion = ComponentVerification(
+            VerificationStatus.UNAVAILABLE,
+            expected=_copiar_configuracion(manifiesto.audit_configuration),
+            detail="No se ha proporcionado la configuración actual.",
+        )
+    else:
+        if not isinstance(audit_configuration, dict):
+            raise ReproducibilityError(
+                "'audit_configuration' debe ser un diccionario."
+            )
+        actual_config = _resolver_configuracion(audit_configuration)
+        configuracion = _comparar_valores(
+            _copiar_configuracion(manifiesto.audit_configuration),
+            actual_config,
+            "Comparación de la configuración efectiva del auditor.",
+        )
+
+    if cleaning_plan is _NOT_PROVIDED:
+        plan = ComponentVerification(
+            VerificationStatus.UNAVAILABLE,
+            expected=(
+                manifiesto.cleaning_plan.a_dict()
+                if manifiesto.cleaning_plan is not None
+                else None
+            ),
+            detail="No se ha proporcionado el estado actual del plan.",
+        )
+    elif cleaning_plan is None:
+        plan = _comparar_valores(
+            manifiesto.cleaning_plan.a_dict()
+            if manifiesto.cleaning_plan is not None
+            else None,
+            None,
+            "Comparación de presencia del plan de limpieza.",
+        )
+    else:
+        if not isinstance(cleaning_plan, CleaningPlan):
+            raise ReproducibilityError(
+                "'cleaning_plan' debe ser CleaningPlan, None o no indicarse."
+            )
+        nombre = (
+            manifiesto.cleaning_plan.name
+            if manifiesto.cleaning_plan is not None
+            else "Plan actual"
+        )
+        actual_stored = _crear_plan_reproducible(
+            cleaning_plan, nombre, manifiesto.created_at
+        )
+        esperado_plan = (
+            manifiesto.cleaning_plan.a_dict()
+            if manifiesto.cleaning_plan is not None
+            else None
+        )
+        actual_plan = actual_stored.a_dict() if actual_stored is not None else None
+        plan = _comparar_valores(
+            esperado_plan, actual_plan,
+            "Comparación de la definición reutilizable del plan.",
+        )
+
+    if manifiesto.environment is None:
+        entorno = ComponentVerification(
+            VerificationStatus.UNAVAILABLE,
+            detail="El manifiesto legado no contiene versiones de entorno.",
+        )
+    else:
+        actual_environment = environment or obtener_entorno_actual()
+        entorno = _comparar_valores(
+            manifiesto.environment.a_dict(),
+            actual_environment.a_dict(),
+            "Comparación de DataQualityPy, Python y paquetes relevantes.",
+        )
+
+    return ReproducibilityVerification(
+        dataset=dataset,
+        audit_configuration=configuracion,
+        cleaning_plan=plan,
+        environment=entorno,
+    )
+

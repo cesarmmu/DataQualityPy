@@ -7,6 +7,8 @@ import pandas as pd
 
 from src.column_analysis import ColumnAnalysis
 from src.inference import SemanticInference, SemanticType
+from src.semantic_compatibility import analizar_compatibilidad_semantica
+from src.type_coherence import analizar_coherencia_tipo
 
 
 def perfilar_dataset(datos: pd.DataFrame) -> dict[str, Any]:
@@ -139,7 +141,7 @@ def _crear_perfil_comun(
     Estas métricas representan hechos observables y no incluyen
     diagnósticos, recomendaciones ni decisiones sobre la calidad.
     """
-    return {
+    perfil: dict[str, Any] = {
         "tipo_pandas": analisis.pandas_dtype,
         "filas": analisis.total_rows,
         "valores_analizables": analisis.analyzable_count,
@@ -168,6 +170,37 @@ def _crear_perfil_comun(
             analisis.duplicate_excess_ratio
         ),
     }
+
+    patrones = analisis.structural_patterns
+
+    if patrones is not None:
+        perfil["patrones_estructurales"] = {
+            "valores_analizados": patrones.analyzed_count,
+            "patron_dominante": patrones.dominant_pattern,
+            "frecuencia_dominante": patrones.dominant_count,
+            "frecuencia_dominante_porcentaje": patrones.dominant_ratio,
+            "numero_patrones": patrones.distinct_pattern_count,
+            "frecuencias": [
+                {"patron": patron, "frecuencia": frecuencia}
+                for patron, frecuencia in patrones.pattern_frequencies
+            ],
+        }
+
+    compatibilidad = analizar_compatibilidad_semantica(analisis)
+
+    if compatibilidad.analyzed_count > 0:
+        perfil["compatibilidad_semantica"] = {
+            "valores_analizados": compatibilidad.analyzed_count,
+            "compatibilidades": {
+                evidencia.compatibility_type.value: {
+                    "valores_compatibles": evidencia.compatible_count,
+                    "porcentaje_compatible": evidencia.compatible_ratio,
+                }
+                for evidencia in compatibilidad.compatibilities
+            },
+        }
+
+    return perfil
 
 
 def _crear_perfil_numerico(
@@ -339,6 +372,22 @@ def perfilar_columnas_semanticas(
                 analisis,
                 inferencia,
             )
+
+            coherencia = analizar_coherencia_tipo(
+                analisis,
+                inferencia,
+            )
+            perfil["comun"]["coherencia_tipo"] = {
+                "tipo_fisico": coherencia.physical_type,
+                "tipo_observado": (
+                    coherencia.observed_type.value
+                    if coherencia.observed_type is not None
+                    else None
+                ),
+                "estado": coherencia.status.value,
+                "porcentaje_evidencia": coherencia.evidence_ratio,
+                "evidencias": list(coherencia.evidence),
+            }
 
         resultado[columna] = perfil
 

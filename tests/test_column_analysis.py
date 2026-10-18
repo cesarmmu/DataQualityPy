@@ -437,3 +437,128 @@ def test_cardinalidad_columna_sin_valores_analizables_v6():
 
     assert resultado.duplicate_excess_count == 0
     assert resultado.duplicate_excess_ratio == pytest.approx(0.0)
+
+# ---------------------------------------------------------------------------
+# V7-C1 — Patrones estructurales de texto
+# ---------------------------------------------------------------------------
+
+
+def test_patron_estructural_uniforme_v7():
+    """C1 debe detectar un patrón textual uniforme sin inferir significado."""
+    serie = pd.Series(
+        ["ABC-1234", "XYZ-5678", "DEF-9012"],
+        name="codigo",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+    patrones = resultado.structural_patterns
+
+    assert patrones is not None
+    assert patrones.analyzed_count == 3
+    assert patrones.dominant_pattern == "AAA-NNNN"
+    assert patrones.dominant_count == 3
+    assert patrones.dominant_ratio == pytest.approx(100.0)
+    assert patrones.distinct_pattern_count == 1
+    assert patrones.pattern_frequencies == (("AAA-NNNN", 3),)
+
+
+def test_patron_estructural_dominante_con_variante_v7():
+    """C1 debe cuantificar variantes sin convertirlas en errores."""
+    serie = pd.Series(
+        ["ABC-1234", "XYZ-5678", "DEF-9012", "AB-3456"],
+        name="codigo",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+    patrones = resultado.structural_patterns
+
+    assert patrones is not None
+    assert patrones.analyzed_count == 4
+    assert patrones.dominant_pattern == "AAA-NNNN"
+    assert patrones.dominant_count == 3
+    assert patrones.dominant_ratio == pytest.approx(75.0)
+    assert patrones.distinct_pattern_count == 2
+    assert patrones.pattern_frequencies == (
+        ("AAA-NNNN", 3),
+        ("AA-NNNN", 1),
+    )
+
+
+def test_patron_estructural_con_espacios_y_simbolos_v7():
+    """C1 debe representar espacios y conservar símbolos visibles."""
+    serie = pd.Series(
+        ["AB 123", "CD 456", "EF 789"],
+        name="referencia",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+    patrones = resultado.structural_patterns
+
+    assert patrones is not None
+    assert patrones.dominant_pattern == "AASNNN"
+    assert patrones.dominant_ratio == pytest.approx(100.0)
+    assert patrones.distinct_pattern_count == 1
+
+
+def test_patron_estructural_requiere_muestra_minima_v7():
+    """Menos de tres valores analizables no deben producir patrón."""
+    serie = pd.Series(
+        ["ABC-1234", "XYZ-5678"],
+        name="codigo",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.structural_patterns is None
+
+
+def test_patron_estructural_descarta_texto_libre_largo_v7():
+    """C1 no debe generar patrones para contenido predominantemente largo."""
+    serie = pd.Series(
+        [
+            "Cliente solicita información adicional sobre el estado de su expediente.",
+            "Pendiente de recibir la documentación necesaria para continuar el proceso.",
+            "Se realizará una nueva revisión cuando se incorporen todos los documentos.",
+        ],
+        name="observaciones",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.structural_patterns is None
+
+
+def test_patron_estructural_cinco_digitos_no_infiere_significado_v7():
+    """Cinco dígitos textuales son solo un patrón NNNNN para C1."""
+    serie = pd.Series(
+        ["28053", "28041", "28012"],
+        name="valor",
+        dtype="object",
+    )
+
+    resultado = analizar_columna(serie)
+    patrones = resultado.structural_patterns
+
+    assert patrones is not None
+    assert patrones.dominant_pattern == "NNNNN"
+    assert patrones.dominant_count == 3
+    assert patrones.dominant_ratio == pytest.approx(100.0)
+    assert patrones.distinct_pattern_count == 1
+
+
+def test_patron_estructural_no_se_aplica_a_columna_numerica_v7():
+    """Una columna físicamente numérica no debe recibir patrones de C1."""
+    serie = pd.Series(
+        [28053, 28041, 28012],
+        name="valor",
+        dtype="int64",
+    )
+
+    resultado = analizar_columna(serie)
+
+    assert resultado.structural_patterns is None

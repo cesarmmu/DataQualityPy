@@ -8,7 +8,10 @@ from src.cleaning_plan import CleaningPlan
 from src.reproducibility import (
     HASH_ALGORITHM,
     HASH_BLOCK_SIZE,
+    DATAQUALITYPY_VERSION,
     MANIFEST_FORMAT_VERSION,
+    RuntimeEnvironment,
+    obtener_entorno_actual,
     DatasetReference,
     ExecutionManifest,
     ReproducibilityError,
@@ -294,6 +297,7 @@ def test_a_dict_genera_estructura_serializable_v6(tmp_path) -> None:
         "dataset",
         "audit_configuration",
         "cleaning_plan",
+        "environment",
     }
 
     assert datos["dataset"] == {
@@ -532,3 +536,21 @@ def test_manifiesto_conserva_sha256_aunque_archivo_cambie_v6(
 
     assert manifiesto.dataset.sha256 == huella_original
     assert calcular_sha256(ruta) != huella_original
+
+def test_manifiesto_v7_incorpora_entorno_minimo(tmp_path) -> None:
+    ruta = _crear_dataset(tmp_path)
+    manifiesto = crear_manifiesto(ruta, created_at=FECHA_PRUEBA)
+    assert manifiesto.environment is not None
+    assert manifiesto.environment.dataqualitypy == DATAQUALITYPY_VERSION
+    assert manifiesto.environment.python
+    assert set(manifiesto.environment.packages) == {
+        "pandas", "numpy", "openpyxl", "streamlit"
+    }
+
+
+def test_entorno_actual_es_serializable_v7() -> None:
+    entorno = obtener_entorno_actual()
+    assert isinstance(entorno, RuntimeEnvironment)
+    datos = entorno.a_dict()
+    assert set(datos) == {"dataqualitypy", "python", "packages"}
+    assert datos["dataqualitypy"] == DATAQUALITYPY_VERSION
