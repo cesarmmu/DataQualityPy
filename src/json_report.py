@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from src.reaudit import ReauditResult
 from src.reproducibility import ExecutionManifest
 
@@ -22,11 +24,33 @@ def _sin_datos_crudos(valor: Any) -> Any:
             for clave, contenido in valor.items()
             if clave not in CLAVES_DATOS_CRUDOS
         }
+
     if isinstance(valor, list):
         return [_sin_datos_crudos(item) for item in valor]
+
     if isinstance(valor, tuple):
         return [_sin_datos_crudos(item) for item in valor]
+
     return valor
+
+
+def _convertir_tipo_json(valor: Any) -> Any:
+    """Convierte tipos NumPy no serializables a tipos compatibles con JSON."""
+    if isinstance(valor, np.integer):
+        return int(valor)
+
+    if isinstance(valor, np.floating):
+        return float(valor)
+
+    if isinstance(valor, np.bool_):
+        return bool(valor)
+
+    if isinstance(valor, np.ndarray):
+        return valor.tolist()
+
+    raise TypeError(
+        f"Object of type {type(valor).__name__} is not JSON serializable"
+    )
 
 
 def _preparar_contenido_json(
@@ -56,6 +80,7 @@ def _preparar_contenido_json(
             raise TypeError(
                 "'resultado_reauditoria' debe ser una instancia de ReauditResult."
             )
+
         contenido["limpieza_reauditoria"] = _sin_datos_crudos(
             resultado_reauditoria.a_dict()
         )
@@ -66,6 +91,7 @@ def _preparar_contenido_json(
                 "'manifiesto_reproducibilidad' debe ser una instancia de "
                 "ExecutionManifest."
             )
+
         contenido["reproducibilidad"] = _sin_datos_crudos(
             manifiesto_reproducibilidad.a_dict()
         )
@@ -90,6 +116,7 @@ def generar_documento_json(
         contenido,
         ensure_ascii=False,
         indent=2,
+        default=_convertir_tipo_json,
     )
 
 

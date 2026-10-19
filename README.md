@@ -494,7 +494,7 @@ El proyecto dispone de una batería automatizada de pruebas para el motor y sus 
 Estado final de validación de DataQualityPy V7:
 
 ```text
-574 passed
+575 passed
 0 failed
 0 DeprecationWarning
 ```
@@ -508,7 +508,7 @@ python -m pytest -W error::DeprecationWarning
 Resultado:
 
 ```text
-574 passed in 7.78s
+575 passed in 3.26s
 ```
 
 La interfaz Streamlit se ha validado funcionalmente durante el desarrollo. La automatización específica de pruebas de UI queda como posible mejora futura.
@@ -539,15 +539,17 @@ DataQualityPy se ha desarrollado de forma incremental:
 
 ## Estado del proyecto
 
-**DataQualityPy V7.0.0 — versión estable**
+**DataQualityPy V7.0.1 — versión estable**
 
 Validación automatizada final:
 
 ```text
-574 tests superados
+575 tests superados
 0 DeprecationWarning
 ```
 
 Flujo funcional:
 
 **ANALIZAR → DETECTAR → EXPLICAR → REVISAR → SIMULAR → LIMPIAR → REAUDITAR → COMPARAR → EXPORTAR**
+
+

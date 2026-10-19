@@ -3,7 +3,7 @@
 ## 1. Identificación del proyecto
 
 **Nombre:** DataQualityPy  
-**Versión:** 7.0.0  
+**Versión:** 7.0.1  
 **Tipo de proyecto:** Aplicación Python para calidad de datos  
 **Ámbito:** Análisis de datos / Data Quality / Data Profiling  
 **Interfaz principal:** Streamlit  
@@ -408,14 +408,14 @@ python -m pytest -W error::DeprecationWarning
 Resultado:
 
 ```text
-574 passed in 7.78s
+575 passed in 3.26s
 ```
 
 Resultado final de validación:
 
 ```text
-Tests ejecutados          574
-Tests superados           574
+Tests ejecutados          575
+Tests superados           575
 Tests fallidos              0
 Errores                     0
 DeprecationWarning           0
@@ -469,7 +469,7 @@ Los principales criterios utilizados durante el desarrollo son:
 
 ## 14. Resultado final
 
-DataQualityPy V7.0.0 constituye una versión estable del proyecto.
+DataQualityPy V7.0.1 constituye una versión estable del proyecto.
 
 El sistema integra en un mismo flujo:
 
@@ -571,9 +571,11 @@ El desarrollo de DataQualityPy permite demostrar competencias relacionadas con d
 
 ## Estado
 
-**DataQualityPy V7.0.0 — versión estable**
+**DataQualityPy V7.0.1 — versión estable**
 
 ```text
-574 tests superados
+575 tests superados
 0 DeprecationWarning
 ```
+
+
